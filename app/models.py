@@ -7,7 +7,7 @@ class Base(AsyncAttrs, DeclarativeBase):
     pass
 
 class Stock(Base):
-    tablename = "stocks"
+    __tablename__ = "stocks"  # Добавлено
     id = Column(Integer, primary_key=True, index=True)
     ticker = Column(String, unique=True, index=True)
     name = Column(String)
@@ -16,7 +16,7 @@ class Stock(Base):
     updated_at = Column(DateTime, default=datetime.utcnow)
 
 class Signal(Base):
-    tablename = "signals"
+    __tablename__ = "signals"  # Добавлено
     id = Column(Integer, primary_key=True, index=True)
     ticker = Column(String, index=True)
     signal_type = Column(String)
