@@ -23,7 +23,7 @@ async def detect_anomalies(db: AsyncSession):
                 )
                 db.add(signal)
                 async with httpx.AsyncClient() as client:
-                    await client.post("http://telegram-bot:8001/signals", json={
+                    await client.post("https://stock-market-bot.herokuapp.com/signals", json={  # Обновлено
                         "ticker": ticker,
                         "signal_type": "price_spike",
                         "value": last_price
