@@ -1,6 +1,6 @@
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select, update
+from sqlalchemy.sql import select, update  # Исправлен импорт
 from .database import get_db
 from .models import Stock, Signal
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -11,7 +11,7 @@ import httpx
 app = FastAPI()
 scheduler = AsyncIOScheduler()
 
-# Список тикеров (заменили на американские акции)
+# Список тикеров (используем американские акции)
 TICKERS = ["AAPL", "GOOGL", "TSLA"]
 
 @app.on_event("startup")
@@ -24,7 +24,7 @@ async def shutdown_event():
     scheduler.shutdown()
 
 async def collect_stock_data():
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(retries=3)) as client:
         for ticker in TICKERS:
             try:
                 stock = yf.Ticker(ticker)
@@ -42,8 +42,7 @@ async def collect_stock_data():
                     stock_entry = result.scalars().first()
                     if stock_entry:
                         await db.execute(
-                            update(Stock).where(Stock.ticker == ticker),
-                            {"last_price": last_price, "volume": volume}
+                            update(Stock).where(Stock.ticker == ticker).values(last_price=last_price, volume=volume)
                         )
                     else:
                         new_stock = Stock(ticker=ticker, name=ticker, last_price=last_price, volume=volume)
