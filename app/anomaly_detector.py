@@ -4,11 +4,8 @@ from sqlalchemy.sql import text
 from .models import Signal
 from datetime import datetime
 import httpx
-
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 async def detect_anomalies(db: AsyncSession):
     query = """
     SELECT ticker, last_price, LAG(last_price) OVER (PARTITION BY ticker ORDER BY updated_at) as prev_price
