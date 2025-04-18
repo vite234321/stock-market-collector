@@ -4,11 +4,8 @@ import yfinance as yf
 from sqlalchemy.ext.asyncio import AsyncSession
 from .models import Stock
 from datetime import datetime
-
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 async def collect_stock_data(ticker: str, db: AsyncSession):
     for attempt in range(1, 4):
         try:
@@ -29,6 +26,7 @@ async def collect_stock_data(ticker: str, db: AsyncSession):
                 logger.info(f"Collected data for {ticker}")
                 return
             else:
+                
                 logger.warning(f"No data for {ticker} on attempt {attempt}")
                 if attempt == 3:
                     return
