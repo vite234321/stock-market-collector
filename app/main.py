@@ -36,7 +36,7 @@ async def collect_stock_data():
             for attempt in range(1, 4):
                 try:
                     stock = yf.Ticker(ticker)
-                    data = stock.history(period="5m")
+                    data = stock.history(period="1d", interval="5m")
                     if data.empty:
                         logger.warning(f"No data for {ticker} on attempt {attempt}")
                         if attempt == 3:
@@ -44,8 +44,8 @@ async def collect_stock_data():
                         await asyncio.sleep(2)
                         continue
                     
-                    last_price = data["Close"][-1]
-                    volume = data["Volume"][-1]
+                    last_price = data["Close"].iloc[-1]
+                    volume = data["Volume"].iloc[-1]
                     
                     async with get_db() as db:
                         # Обновляем или создаём запись
@@ -59,7 +59,7 @@ async def collect_stock_data():
                             )
                         else:
                             new_stock = Stock(
-                                ticker=ticker, name=ticker, last_price=last_price, volume=volume
+                                ticker=ticker, name=stock.info.get("shortName", ticker), last_price=last_price, volume=volume
                             )
                             db.add(new_stock)
                         await db.commit()
