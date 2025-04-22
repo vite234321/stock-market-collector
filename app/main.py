@@ -8,7 +8,7 @@ from .models import Stock, Signal
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from .anomaly_detector import detect_anomalies_for_ticker
 from datetime import datetime
-import yfinance as yf
+from moexalgo import Market, Ticker
 import httpx
 
 # Configure logging
@@ -18,8 +18,8 @@ logger = logging.getLogger(__name__)
 app = FastAPI()
 scheduler = AsyncIOScheduler()
 
-# Список тикеров (используем американские акции)
-TICKERS = ["AAPL", "GOOGL", "TSLA"]
+# Список тикеров (российские акции)
+TICKERS = ["SBER.ME", "GAZP.ME", "LKOH.ME"]
 
 @app.on_event("startup")
 async def startup_event():
@@ -35,17 +35,17 @@ async def collect_stock_data():
         for ticker in TICKERS:
             for attempt in range(1, 4):
                 try:
-                    stock = yf.Ticker(ticker)
-                    data = stock.history(period="1d", interval="5m")
-                    if data.empty:
+                    stock = Ticker(ticker, market=Market('stocks'))
+                    data = stock.price_info()
+                    if not data or 'LAST' not in data:
                         logger.warning(f"No data for {ticker} on attempt {attempt}")
                         if attempt == 3:
                             continue
                         await asyncio.sleep(2)
                         continue
                     
-                    last_price = data["Close"].iloc[-1]
-                    volume = data["Volume"].iloc[-1]
+                    last_price = data['LAST']
+                    volume = data.get('VOLUME', 0)
                     
                     async with get_db() as db:
                         # Обновляем или создаём запись
@@ -59,7 +59,7 @@ async def collect_stock_data():
                             )
                         else:
                             new_stock = Stock(
-                                ticker=ticker, name=stock.info.get("shortName", ticker), last_price=last_price, volume=volume
+                                ticker=ticker, name=stock.info.get('shortName', ticker), last_price=last_price, volume=volume
                             )
                             db.add(new_stock)
                         await db.commit()
@@ -100,3 +100,11 @@ async def get_stock(ticker: str, db: AsyncSession = Depends(get_db)):
     if not stock:
         raise HTTPException(status_code=404, detail="Stock not found")
     return stock
+
+@app.get("/signals")
+async def get_signals(ticker: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Signal).where(Signal.ticker == ticker))
+    signals = result.scalars().all()
+    if not signals:
+        raise HTTPException(status_code=404, detail="No signals found")
+    return signals
