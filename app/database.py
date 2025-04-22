@@ -3,6 +3,7 @@ import logging
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from contextlib import asynccontextmanager
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -21,8 +22,12 @@ elif not DATABASE_URL.startswith("postgresql+asyncpg://"):
 
 logger.info(f"Используется DATABASE_URL: {DATABASE_URL}")
 
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+def create_engine():
+    return create_async_engine(DATABASE_URL, echo=True, future=True)
+
 try:
-    engine = create_async_engine(DATABASE_URL, echo=True, future=True)
+    engine = create_engine()
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 except Exception as e:
     logger.error(f"Не удалось создать асинхронный движок: {e}")
