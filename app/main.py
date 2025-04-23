@@ -27,8 +27,11 @@ bot = Bot(
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 )
 
-# Список тикеров (российские акции)
-TICKERS = ["SBER.ME", "GAZP.ME", "LKOH.ME"]
+# Расширенный список тикеров
+TICKERS = [
+    "SBER.ME", "GAZP.ME", "LKOH.ME", "YNDX.ME", "ROSN.ME",
+    "TATN.ME", "VTBR.ME", "MGNT.ME", "NVTK.ME", "GMKN.ME"
+]
 
 @app.on_event("startup")
 async def startup_event():
@@ -115,7 +118,7 @@ async def collect_stock_data():
                                     try:
                                         await bot.send_message(
                                             chat_id=sub.user_id,
-                                            text=f"📈 Акция {ticker} выросла на более чем 5%! Текущая цена: {signal['value']} RUB"
+                                            text=f"📈 Акция <b>{ticker}</b> выросла на более чем 5%! Текущая цена: {signal['value']} RUB"
                                         )
                                         logger.info(f"Уведомление отправлено пользователю {sub.user_id}")
                                     except Exception as e:
