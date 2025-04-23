@@ -32,24 +32,28 @@ TICKERS = ["SBER.ME", "GAZP.ME", "LKOH.ME"]
 
 @app.on_event("startup")
 async def startup_event():
+    logger.info("Запуск коллектора...")
     scheduler.start()
     scheduler.add_job(collect_stock_data, "interval", minutes=5)
 
 @app.on_event("shutdown")
 async def shutdown_event():
+    logger.info("Завершение работы коллектора...")
     scheduler.shutdown()
     await bot.session.close()
 
 async def collect_stock_data():
+    logger.info("Начало сбора данных для тикеров...")
     async with httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(retries=3)) as client:
         async with get_db() as db:
             for ticker in TICKERS:
+                logger.info(f"Обработка тикера: {ticker}")
                 for attempt in range(1, 4):
                     try:
                         stock = Ticker(ticker.replace(".ME", ""), market=Market('stocks'))
                         data = stock.price_info()
                         if not data or 'LAST' not in data:
-                            logger.warning(f"No data for {ticker} on attempt {attempt}")
+                            logger.warning(f"Нет данных для {ticker} на попытке {attempt}")
                             if attempt == 3:
                                 continue
                             await asyncio.sleep(2)
@@ -57,6 +61,7 @@ async def collect_stock_data():
 
                         last_price = data['LAST']
                         volume = data.get('VOLRUR', 0)
+                        logger.info(f"Получены данные для {ticker}: цена={last_price}, объём={volume}")
 
                         # Обновляем или создаём запись
                         result = await db.execute(select(Stock).where(Stock.ticker == ticker))
@@ -67,6 +72,7 @@ async def collect_stock_data():
                                     last_price=last_price, volume=volume, updated_at=datetime.utcnow()
                                 )
                             )
+                            logger.info(f"Обновлена запись для {ticker}")
                         else:
                             new_stock = Stock(
                                 ticker=ticker,
@@ -75,6 +81,7 @@ async def collect_stock_data():
                                 volume=volume
                             )
                             db.add(new_stock)
+                            logger.info(f"Создана новая запись для {ticker}")
                         await db.commit()
 
                         # Анализ аномалий
@@ -88,6 +95,7 @@ async def collect_stock_data():
                                 )
                                 db.add(new_signal)
                                 await db.commit()
+                                logger.info(f"Сохранён сигнал для {ticker}: {signal}")
 
                                 # Отправка сигнала в telegram-bot
                                 await client.post("https://stock-market-bot.herokuapp.com/signals", json={
@@ -95,28 +103,32 @@ async def collect_stock_data():
                                     "signal_type": signal["type"],
                                     "value": signal["value"]
                                 })
+                                logger.info(f"Сигнал отправлен в stock-market-bot для {ticker}")
 
                                 # Отправка уведомлений подписчикам
                                 subscriptions = await db.execute(
                                     select(Subscription).where(Subscription.ticker == ticker)
                                 )
                                 subscriptions = subscriptions.scalars().all()
+                                logger.info(f"Найдено {len(subscriptions)} подписчиков для {ticker}")
                                 for sub in subscriptions:
                                     try:
                                         await bot.send_message(
                                             chat_id=sub.user_id,
                                             text=f"📈 Акция {ticker} выросла на более чем 5%! Текущая цена: {signal['value']} RUB"
                                         )
+                                        logger.info(f"Уведомление отправлено пользователю {sub.user_id}")
                                     except Exception as e:
                                         logger.error(f"Ошибка отправки уведомления пользователю {sub.user_id}: {e}")
                         except Exception as e:
-                            logger.error(f"Error analyzing anomalies for {ticker}: {e}")
+                            logger.error(f"Ошибка анализа аномалий для {ticker}: {e}")
                         break
                     except Exception as e:
-                        logger.warning(f"Error fetching data for {ticker} on attempt {attempt}: {e}")
+                        logger.warning(f"Ошибка получения данных для {ticker} на попытке {attempt}: {e}")
                         if attempt == 3:
                             break
                         await asyncio.sleep(2)
+    logger.info("Сбор данных завершён")
 
 @app.get("/stocks")
 async def get_stocks(db: AsyncSession = Depends(get_db)):
@@ -138,3 +150,7 @@ async def get_signals(ticker: str, db: AsyncSession = Depends(get_db)):
     if not signals:
         raise HTTPException(status_code=404, detail="No signals found")
     return signals
+
+@app.get("/health")
+async def health_check():
+    return {"status": "Collector is running"}
