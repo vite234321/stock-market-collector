@@ -4,12 +4,15 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import select, update
 from .database import get_db
-from .models import Stock, Signal
+from .models import Stock, Signal, Subscription
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from .anomaly_detector import detect_anomalies_for_ticker
 from datetime import datetime
 from moexalgo import Market, Ticker
 import httpx
+from aiogram import Bot
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -17,6 +20,12 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 scheduler = AsyncIOScheduler()
+
+# Инициализация бота
+bot = Bot(
+    token=os.getenv("BOT_TOKEN"),
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+)
 
 # Список тикеров (российские акции)
 TICKERS = ["SBER.ME", "GAZP.ME", "LKOH.ME"]
@@ -29,25 +38,26 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     scheduler.shutdown()
+    await bot.session.close()
 
 async def collect_stock_data():
     async with httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(retries=3)) as client:
-        for ticker in TICKERS:
-            for attempt in range(1, 4):
-                try:
-                    stock = Ticker(ticker, market=Market('stocks'))
-                    data = stock.price_info()
-                    if not data or 'LAST' not in data:
-                        logger.warning(f"No data for {ticker} on attempt {attempt}")
-                        if attempt == 3:
+        async with get_db() as db:
+            for ticker in TICKERS:
+                for attempt in range(1, 4):
+                    try:
+                        stock = Ticker(ticker.replace(".ME", ""), market=Market('stocks'))
+                        data = stock.price_info()
+                        if not data or 'LAST' not in data:
+                            logger.warning(f"No data for {ticker} on attempt {attempt}")
+                            if attempt == 3:
+                                continue
+                            await asyncio.sleep(2)
                             continue
-                        await asyncio.sleep(2)
-                        continue
-                    
-                    last_price = data['LAST']
-                    volume = data.get('VOLUME', 0)
-                    
-                    async with get_db() as db:
+
+                        last_price = data['LAST']
+                        volume = data.get('VOLRUR', 0)
+
                         # Обновляем или создаём запись
                         result = await db.execute(select(Stock).where(Stock.ticker == ticker))
                         stock_entry = result.scalars().first()
@@ -59,34 +69,54 @@ async def collect_stock_data():
                             )
                         else:
                             new_stock = Stock(
-                                ticker=ticker, name=stock.info.get('shortName', ticker), last_price=last_price, volume=volume
+                                ticker=ticker,
+                                name=stock.info.get('shortName', ticker),
+                                last_price=last_price,
+                                volume=volume
                             )
                             db.add(new_stock)
                         await db.commit()
-                        
+
                         # Анализ аномалий
                         try:
                             signal = await detect_anomalies_for_ticker(ticker, last_price, volume, db)
                             if signal:
                                 new_signal = Signal(
-                                    ticker=ticker, signal_type=signal["type"], value=signal["value"]
+                                    ticker=ticker,
+                                    signal_type=signal["type"],
+                                    value=signal["value"]
                                 )
                                 db.add(new_signal)
                                 await db.commit()
+
                                 # Отправка сигнала в telegram-bot
                                 await client.post("https://stock-market-bot.herokuapp.com/signals", json={
                                     "ticker": ticker,
                                     "signal_type": signal["type"],
                                     "value": signal["value"]
                                 })
+
+                                # Отправка уведомлений подписчикам
+                                subscriptions = await db.execute(
+                                    select(Subscription).where(Subscription.ticker == ticker)
+                                )
+                                subscriptions = subscriptions.scalars().all()
+                                for sub in subscriptions:
+                                    try:
+                                        await bot.send_message(
+                                            chat_id=sub.user_id,
+                                            text=f"📈 Акция {ticker} выросла на более чем 5%! Текущая цена: {signal['value']} RUB"
+                                        )
+                                    except Exception as e:
+                                        logger.error(f"Ошибка отправки уведомления пользователю {sub.user_id}: {e}")
                         except Exception as e:
                             logger.error(f"Error analyzing anomalies for {ticker}: {e}")
-                    break
-                except Exception as e:
-                    logger.warning(f"Error fetching data for {ticker} on attempt {attempt}: {e}")
-                    if attempt == 3:
                         break
-                    await asyncio.sleep(2)
+                    except Exception as e:
+                        logger.warning(f"Error fetching data for {ticker} on attempt {attempt}: {e}")
+                        if attempt == 3:
+                            break
+                        await asyncio.sleep(2)
 
 @app.get("/stocks")
 async def get_stocks(db: AsyncSession = Depends(get_db)):
