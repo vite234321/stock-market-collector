@@ -27,16 +27,23 @@ bot = Bot(
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 )
 
-# Расширенный список тикеров
-TICKERS = [
-    "SBER.ME", "GAZP.ME", "LKOH.ME", "YNDX.ME", "ROSN.ME",
-    "TATN.ME", "VTBR.ME", "MGNT.ME", "NVTK.ME", "GMKN.ME"
-]
+# Получаем все тикеры с MOEX
+def get_all_tickers():
+    try:
+        market = Market("stocks")
+        tickers = market.tickers()
+        return [ticker['ticker'] + ".ME" for ticker in tickers]
+    except Exception as e:
+        logger.error(f"Ошибка при получении списка тикеров: {e}")
+        return []
+
+TICKERS = get_all_tickers()
 
 @app.on_event("startup")
 async def startup_event():
     logger.info("Запуск коллектора...")
     scheduler.start()
+    # Обновляем данные каждые 5 минут
     scheduler.add_job(collect_stock_data, "interval", minutes=5)
 
 @app.on_event("shutdown")
@@ -46,7 +53,7 @@ async def shutdown_event():
     await bot.session.close()
 
 async def collect_stock_data():
-    logger.info("Начало сбора данных для тикеров...")
+    logger.info(f"Начало сбора данных для {len(TICKERS)} тикеров...")
     async with httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(retries=3)) as client:
         async with get_db() as db:
             for ticker in TICKERS:
@@ -72,7 +79,9 @@ async def collect_stock_data():
                         if stock_entry:
                             await db.execute(
                                 update(Stock).where(Stock.ticker == ticker).values(
-                                    last_price=last_price, volume=volume, updated_at=datetime.utcnow()
+                                    last_price=last_price,
+                                    volume=volume,
+                                    updated_at=datetime.utcnow()
                                 )
                             )
                             logger.info(f"Обновлена запись для {ticker}")
