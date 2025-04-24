@@ -18,6 +18,8 @@ from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
+logger.info("Импорт всех зависимостей завершён.")
+
 app = FastAPI()
 
 logger.info("Инициализация Telegram-бота...")
@@ -29,11 +31,16 @@ logger.info("Telegram-бот успешно инициализирован.")
 
 TICKERS = ["SBER.ME", "GAZP.ME", "LKOH.ME", "YNDX.ME", "ROSN.ME"]
 
+logger.info(f"Список тикеров: {TICKERS}")
+
 @app.on_event("startup")
 async def startup_event():
     logger.info("Запуск коллектора...")
     logger.info("Запуск немедленного сбора данных...")
-    await collect_stock_data()
+    try:
+        await collect_stock_data()
+    except Exception as e:
+        logger.error(f"Ошибка при выполнении collect_stock_data на старте: {e}")
     logger.info("Запуск цикла для периодического сбора данных...")
     asyncio.create_task(run_collector())
 
@@ -45,7 +52,10 @@ async def shutdown_event():
 async def run_collector():
     while True:
         logger.info("Начало циклического сбора данных...")
-        await collect_stock_data()
+        try:
+            await collect_stock_data()
+        except Exception as e:
+            logger.error(f"Ошибка при выполнении collect_stock_data в цикле: {e}")
         logger.info("Ожидание 10 минут перед следующим сбором данных...")
         await asyncio.sleep(600)
 
