@@ -33,8 +33,10 @@ TICKERS = ["SBER.ME", "GAZP.ME", "LKOH.ME", "YNDX.ME", "ROSN.ME"]
 async def startup_event():
     logger.info("Запуск коллектора...")
     # Запускаем сбор данных сразу
+    logger.info("Запуск немедленного сбора данных...")
     await collect_stock_data()
     # Запускаем бесконечный цикл для сбора данных каждые 10 минут
+    logger.info("Запуск цикла для периодического сбора данных...")
     asyncio.create_task(run_collector())
 
 @app.on_event("shutdown")
@@ -44,6 +46,7 @@ async def shutdown_event():
 
 async def run_collector():
     while True:
+        logger.info("Начало циклического сбора данных...")
         await collect_stock_data()
         logger.info("Ожидание 10 минут перед следующим сбором данных...")
         await asyncio.sleep(600)  # 10 минут
