@@ -12,7 +12,7 @@ from .database import get_db
 from .models import Stock, Signal, Subscription
 from .anomaly_detector import detect_anomalies_for_ticker
 from datetime import datetime
-from moexalgo import Market, Ticker
+import yfinance as yf
 import httpx
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
@@ -76,19 +76,17 @@ async def collect_stock_data():
                         logger.info(f"Обработка тикера: {ticker}")
                         for attempt in range(1, 4):
                             try:
-                                stock = Ticker(ticker.replace(".ME", ""), market=Market('stocks'))
-                                logger.info(f"Объект Ticker для {ticker} создан.")
-                                
-                                logger.info(f"Попытка {attempt}: получение информации об акции {ticker}")
+                                # Используем yfinance вместо moexalgo
+                                logger.info(f"Попытка {attempt}: получение данных для {ticker} через yfinance")
+                                stock = yf.Ticker(ticker)
                                 stock_info = stock.info
                                 logger.info(f"Информация об акции {ticker}: {stock_info}")
-                                stock_name = stock_info.get('SHORTNAME', ticker) if isinstance(stock_info, dict) else getattr(stock_info, 'shortName', ticker)
-                                logger.info(f"Имя акции для {ticker}: {stock_name}")
+                                stock_name = stock_info.get('shortName', ticker)
 
+                                # Получаем текущую цену
                                 logger.info(f"Попытка {attempt}: получение ценовых данных для {ticker}")
-                                price_data = stock.price_info()
-                                logger.info(f"Ценовые данные для {ticker}: {price_data}")
-                                if not price_data or 'LAST' not in price_data:
+                                price_data = stock.history(period="1d")
+                                if price_data.empty or 'Close' not in price_data.columns:
                                     logger.warning(f"Нет ценовых данных для {ticker} на попытке {attempt}")
                                     if attempt == 3:
                                         logger.error(f"Не удалось получить ценовые данные для {ticker} после 3 попыток.")
@@ -96,8 +94,8 @@ async def collect_stock_data():
                                     await asyncio.sleep(2)
                                     continue
 
-                                last_price = price_data['LAST']
-                                volume = price_data.get('VOLUME', 0)
+                                last_price = price_data['Close'][-1]
+                                volume = int(price_data['Volume'][-1]) if 'Volume' in price_data.columns else 0
                                 logger.info(f"Получены данные для {ticker}: цена={last_price}, объём={volume}")
 
                                 logger.info(f"Поиск записи для {ticker} в базе данных...")
