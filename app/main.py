@@ -43,8 +43,8 @@ TICKERS = get_all_tickers()
 async def startup_event():
     logger.info("Запуск коллектора...")
     scheduler.start()
-    # Обновляем данные каждые 5 минут
-    scheduler.add_job(collect_stock_data, "interval", minutes=5)
+    # Обновляем данные каждые 10 минут
+    scheduler.add_job(collect_stock_data, "interval", minutes=10)
 
 @app.on_event("shutdown")
 async def shutdown_event():
