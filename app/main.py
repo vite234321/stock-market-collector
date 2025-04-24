@@ -32,6 +32,8 @@ TICKERS = ["SBER.ME", "GAZP.ME", "LKOH.ME", "YNDX.ME", "ROSN.ME"]
 @app.on_event("startup")
 async def startup_event():
     logger.info("Запуск коллектора...")
+    # Запускаем сбор данных сразу
+    await collect_stock_data()
     # Запускаем бесконечный цикл для сбора данных каждые 10 минут
     asyncio.create_task(run_collector())
 
