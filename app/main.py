@@ -33,13 +33,14 @@ def get_all_tickers():
     try:
         market = Market("stocks")
         tickers = market.tickers()
-        logger.info(f"Получено {len(tickers)} тикеров с MOEX")
+        logger.info(f"Получено {len(tickers)} тикеров с MOEX: {tickers}")
         return [ticker['ticker'] + ".ME" for ticker in tickers]
     except Exception as e:
         logger.error(f"Ошибка при получении списка тикеров: {e}")
         return []
 
-TICKERS = get_all_tickers()
+# Для теста ограничим список тикеров
+TICKERS = ["SBER.ME", "GAZP.ME", "LKOH.ME", "YNDX.ME", "ROSN.ME"]
 
 @app.on_event("startup")
 async def startup_event():
@@ -57,7 +58,7 @@ async def shutdown_event():
     await bot.session.close()
 
 async def collect_stock_data():
-    logger.info(f"Начало сбора данных для {len(TICKERS)} тикеров...")
+    logger.info(f"Начало сбора данных для {len(TICKERS)} тикеров: {TICKERS}")
     async with httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(retries=3)) as client:
         async with get_db() as db:
             for ticker in TICKERS:
