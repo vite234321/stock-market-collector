@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import select, update
 from .database import get_db
 from .models import Stock, Signal, Subscription
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from .anomaly_detector import detect_anomalies_for_ticker
 from datetime import datetime
 from moexalgo import Market, Ticker
@@ -20,7 +19,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
-scheduler = AsyncIOScheduler()
 
 # Инициализация бота
 bot = Bot(
@@ -34,17 +32,19 @@ TICKERS = ["SBER.ME", "GAZP.ME", "LKOH.ME", "YNDX.ME", "ROSN.ME"]
 @app.on_event("startup")
 async def startup_event():
     logger.info("Запуск коллектора...")
-    scheduler.start()
-    # Обновляем данные каждые 10 минут
-    scheduler.add_job(collect_stock_data, "interval", minutes=10)
-    # Запускаем сбор данных сразу при старте
-    await collect_stock_data()
+    # Запускаем бесконечный цикл для сбора данных каждые 10 минут
+    asyncio.create_task(run_collector())
 
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("Завершение работы коллектора...")
-    scheduler.shutdown()
     await bot.session.close()
+
+async def run_collector():
+    while True:
+        await collect_stock_data()
+        logger.info("Ожидание 10 минут перед следующим сбором данных...")
+        await asyncio.sleep(600)  # 10 минут
 
 async def collect_stock_data():
     logger.info(f"Начало сбора данных для {len(TICKERS)} тикеров: {TICKERS}")
