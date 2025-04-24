@@ -1,6 +1,10 @@
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+logger.info("Файл app/main.py импортирован. Начало выполнения.")
+
 from fastapi import FastAPI, Depends, HTTPException
 import asyncio
-import logging
 import os
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import select, update
@@ -13,9 +17,6 @@ import httpx
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -56,7 +57,6 @@ async def collect_stock_data():
             try:
                 async with get_db() as db:
                     logger.info("Подключение к базе данных успешно установлено.")
-                    # Проверка, можем ли мы выполнить простой запрос
                     logger.info("Проверка состояния базы данных: выполнение тестового запроса...")
                     test_query = await db.execute(select(Stock))
                     test_result = test_query.scalars().all()
