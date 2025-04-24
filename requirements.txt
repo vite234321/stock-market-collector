@@ -1,8 +1,10 @@
-fastapi&gt;=0.115.0 
-sqlalchemy&gt;=2.0.0 
-asyncpg&gt;=0.29.0 
-moexalgo&gt;=0.4.1 
-apscheduler&gt;=3.10.4 
-python-dotenv&gt;=1.0.0 
-aiogram&gt;=3.0.0 
-httpx&gt;=0.27.0
+fastapi==0.115.0
+  uvicorn==0.30.6
+  httpx==0.27.2
+  sqlalchemy==2.0.35
+  asyncpg==0.29.0
+  psycopg2-binary==2.9.9
+  apscheduler==3.10.4
+  moexalgo==0.4.1
+  aiogram==3.13.1
+  python-dotenv==1.0.1
