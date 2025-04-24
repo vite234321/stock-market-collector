@@ -33,6 +33,7 @@ def get_all_tickers():
     try:
         market = Market("stocks")
         tickers = market.tickers()
+        logger.info(f"Получено {len(tickers)} тикеров с MOEX")
         return [ticker['ticker'] + ".ME" for ticker in tickers]
     except Exception as e:
         logger.error(f"Ошибка при получении списка тикеров: {e}")
@@ -46,6 +47,8 @@ async def startup_event():
     scheduler.start()
     # Обновляем данные каждые 10 минут
     scheduler.add_job(collect_stock_data, "interval", minutes=10)
+    # Запускаем сбор данных сразу при старте
+    await collect_stock_data()
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -64,6 +67,7 @@ async def collect_stock_data():
                         stock = Ticker(ticker.replace(".ME", ""), market=Market('stocks'))
                         # Получаем текущую цену
                         price_data = stock.price_info()
+                        logger.info(f"Данные для {ticker}: {price_data}")
                         if not price_data or 'LAST' not in price_data:
                             logger.warning(f"Нет данных для {ticker} на попытке {attempt}")
                             if attempt == 3:
@@ -73,7 +77,7 @@ async def collect_stock_data():
 
                         last_price = price_data['LAST']
                         # Проверяем наличие объёма торгов
-                        volume = price_data.get('VOLUME', 0)  # В новых версиях поле может называться иначе
+                        volume = price_data.get('VOLUME', 0)
                         logger.info(f"Получены данные для {ticker}: цена={last_price}, объём={volume}")
 
                         # Получаем информацию об акции
