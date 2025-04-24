@@ -12,7 +12,7 @@ from .database import get_db
 from .models import Stock, Signal, Subscription
 from .anomaly_detector import detect_anomalies_for_ticker
 from datetime import datetime
-import yfinance as yf
+from moexalgo import Market, Ticker
 import httpx
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
@@ -29,9 +29,19 @@ bot = Bot(
 )
 logger.info("Telegram-бот успешно инициализирован.")
 
-TICKERS = ["SBER.ME", "GAZP.ME", "LKOH.ME", "YNDX.ME", "ROSN.ME"]
+# Получаем список всех тикеров с MOEX
+logger.info("Получение списка всех тикеров с MOEX...")
+try:
+    market = Market('stocks')
+    tickers_df = market.tickers()
+    TICKERS = [f"{ticker}.ME" for ticker in tickers_df['SECID'].tolist()]
+    logger.info(f"Получено {len(TICKERS)} тикеров: {TICKERS[:5]}...")  # Первые 5 для примера
+except Exception as e:
+    logger.error(f"Ошибка получения списка тикеров с MOEX: {e}")
+    TICKERS = ["SBER.ME", "GAZP.ME", "LKOH.ME", "YNDX.ME", "ROSN.ME"]
+    logger.info("Используем резервный список тикеров.")
 
-logger.info(f"Список тикеров: {TICKERS}")
+logger.info(f"Итоговый список тикеров: {TICKERS[:5]}...")
 
 @app.on_event("startup")
 async def startup_event():
@@ -57,10 +67,10 @@ async def run_collector():
         except Exception as e:
             logger.error(f"Ошибка при выполнении collect_stock_data в цикле: {e}")
         logger.info("Ожидание 10 минут перед следующим сбором данных...")
-        await asyncio.sleep(600)
+        await asyncio.sleep(600)  # 10 минут
 
 async def collect_stock_data():
-    logger.info(f"Начало сбора данных для {len(TICKERS)} тикеров: {TICKERS}")
+    logger.info(f"Начало сбора данных для {len(TICKERS)} тикеров")
     try:
         async with httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(retries=3)) as client:
             logger.info("HTTP-клиент успешно инициализирован.")
@@ -76,17 +86,19 @@ async def collect_stock_data():
                         logger.info(f"Обработка тикера: {ticker}")
                         for attempt in range(1, 4):
                             try:
-                                # Используем yfinance вместо moexalgo
-                                logger.info(f"Попытка {attempt}: получение данных для {ticker} через yfinance")
-                                stock = yf.Ticker(ticker)
+                                stock = Ticker(ticker.replace(".ME", ""), market=Market('stocks'))
+                                logger.info(f"Объект Ticker для {ticker} создан.")
+                                
+                                logger.info(f"Попытка {attempt}: получение информации об акции {ticker}")
                                 stock_info = stock.info
                                 logger.info(f"Информация об акции {ticker}: {stock_info}")
-                                stock_name = stock_info.get('shortName', ticker)
+                                stock_name = stock_info.get('SHORTNAME', ticker) if isinstance(stock_info, dict) else getattr(stock_info, 'shortName', ticker)
+                                logger.info(f"Имя акции для {ticker}: {stock_name}")
 
-                                # Получаем текущую цену
                                 logger.info(f"Попытка {attempt}: получение ценовых данных для {ticker}")
-                                price_data = stock.history(period="1d")
-                                if price_data.empty or 'Close' not in price_data.columns:
+                                price_data = stock.price_info()
+                                logger.info(f"Ценовые данные для {ticker}: {price_data}")
+                                if not price_data or 'LAST' not in price_data:
                                     logger.warning(f"Нет ценовых данных для {ticker} на попытке {attempt}")
                                     if attempt == 3:
                                         logger.error(f"Не удалось получить ценовые данные для {ticker} после 3 попыток.")
@@ -94,8 +106,8 @@ async def collect_stock_data():
                                     await asyncio.sleep(2)
                                     continue
 
-                                last_price = price_data['Close'][-1]
-                                volume = int(price_data['Volume'][-1]) if 'Volume' in price_data.columns else 0
+                                last_price = price_data['LAST']
+                                volume = price_data.get('VOLUME', 0)
                                 logger.info(f"Получены данные для {ticker}: цена={last_price}, объём={volume}")
 
                                 logger.info(f"Поиск записи для {ticker} в базе данных...")
@@ -126,6 +138,47 @@ async def collect_stock_data():
                                 logger.info(f"Сохранение изменений для {ticker} в базе данных...")
                                 await db.commit()
                                 logger.info(f"Коммит изменений для {ticker} выполнен.")
+
+                                # Анализ аномалий
+                                try:
+                                    logger.info(f"Запуск анализа аномалий для {ticker}...")
+                                    signal = await detect_anomalies_for_ticker(ticker, last_price, volume, db)
+                                    if signal:
+                                        new_signal = Signal(
+                                            ticker=ticker,
+                                            signal_type=signal["type"],
+                                            value=signal["value"],
+                                            created_at=datetime.utcnow()
+                                        )
+                                        db.add(new_signal)
+                                        await db.commit()
+                                        logger.info(f"Сохранён сигнал для {ticker}: {signal}")
+
+                                        logger.info(f"Отправка сигнала для {ticker} в stock-market-bot...")
+                                        await client.post("https://stock-market-bot.herokuapp.com/signals", json={
+                                            "ticker": ticker,
+                                            "signal_type": signal["type"],
+                                            "value": signal["value"]
+                                        })
+                                        logger.info(f"Сигнал отправлен в stock-market-bot для {ticker}")
+
+                                        logger.info(f"Поиск подписчиков для {ticker}...")
+                                        subscriptions = await db.execute(
+                                            select(Subscription).where(Subscription.ticker == ticker)
+                                        )
+                                        subscriptions = subscriptions.scalars().all()
+                                        logger.info(f"Найдено {len(subscriptions)} подписчиков для {ticker}")
+                                        for sub in subscriptions:
+                                            try:
+                                                await bot.send_message(
+                                                    chat_id=sub.user_id,
+                                                    text=f"📈 Акция <b>{ticker}</b> ({stock_name}): {signal['type']}! Текущая цена: {signal['value']} RUB"
+                                                )
+                                                logger.info(f"Уведомление отправлено пользователю {sub.user_id}")
+                                            except Exception as e:
+                                                logger.error(f"Ошибка отправки уведомления пользователю {sub.user_id}: {e}")
+                                except Exception as e:
+                                    logger.error(f"Ошибка анализа аномалий для {ticker}: {e}")
                                 break
                             except Exception as e:
                                 logger.warning(f"Ошибка получения данных для {ticker} на попытке {attempt}: {e}")
