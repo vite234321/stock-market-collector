@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException
 import asyncio
 import logging
+import os
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import select, update
 from .database import get_db
@@ -61,17 +62,23 @@ async def collect_stock_data():
                 for attempt in range(1, 4):
                     try:
                         stock = Ticker(ticker.replace(".ME", ""), market=Market('stocks'))
-                        data = stock.price_info()
-                        if not data or 'LAST' not in data:
+                        # Получаем текущую цену
+                        price_data = stock.price_info()
+                        if not price_data or 'LAST' not in price_data:
                             logger.warning(f"Нет данных для {ticker} на попытке {attempt}")
                             if attempt == 3:
                                 continue
                             await asyncio.sleep(2)
                             continue
 
-                        last_price = data['LAST']
-                        volume = data.get('VOLRUR', 0)
+                        last_price = price_data['LAST']
+                        # Проверяем наличие объёма торгов
+                        volume = price_data.get('VOLUME', 0)  # В новых версиях поле может называться иначе
                         logger.info(f"Получены данные для {ticker}: цена={last_price}, объём={volume}")
+
+                        # Получаем информацию об акции
+                        stock_info = stock.info
+                        stock_name = stock_info.get('SHORTNAME', ticker) if isinstance(stock_info, dict) else getattr(stock_info, 'shortName', ticker)
 
                         # Обновляем или создаём запись
                         result = await db.execute(select(Stock).where(Stock.ticker == ticker))
@@ -88,7 +95,7 @@ async def collect_stock_data():
                         else:
                             new_stock = Stock(
                                 ticker=ticker,
-                                name=stock.info.get('shortName', ticker),
+                                name=stock_name,
                                 last_price=last_price,
                                 volume=volume
                             )
