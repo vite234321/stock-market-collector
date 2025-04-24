@@ -28,18 +28,7 @@ bot = Bot(
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 )
 
-# Получаем все тикеры с MOEX
-def get_all_tickers():
-    try:
-        market = Market("stocks")
-        tickers = market.tickers()
-        logger.info(f"Получено {len(tickers)} тикеров с MOEX: {tickers}")
-        return [ticker['ticker'] + ".ME" for ticker in tickers]
-    except Exception as e:
-        logger.error(f"Ошибка при получении списка тикеров: {e}")
-        return []
-
-# Для теста ограничим список тикеров
+# Для теста используем фиксированный список тикеров
 TICKERS = ["SBER.ME", "GAZP.ME", "LKOH.ME", "YNDX.ME", "ROSN.ME"]
 
 @app.on_event("startup")
@@ -66,24 +55,26 @@ async def collect_stock_data():
                 for attempt in range(1, 4):
                     try:
                         stock = Ticker(ticker.replace(".ME", ""), market=Market('stocks'))
+                        # Проверяем доступность API MOEX
+                        logger.info(f"Попытка получить информацию об акции {ticker}")
+                        stock_info = stock.info
+                        logger.info(f"Информация об акции {ticker}: {stock_info}")
+                        stock_name = stock_info.get('SHORTNAME', ticker) if isinstance(stock_info, dict) else getattr(stock_info, 'shortName', ticker)
+
                         # Получаем текущую цену
+                        logger.info(f"Попытка получить ценовые данные для {ticker}")
                         price_data = stock.price_info()
-                        logger.info(f"Данные для {ticker}: {price_data}")
+                        logger.info(f"Ценовые данные для {ticker}: {price_data}")
                         if not price_data or 'LAST' not in price_data:
-                            logger.warning(f"Нет данных для {ticker} на попытке {attempt}")
+                            logger.warning(f"Нет ценовых данных для {ticker} на попытке {attempt}")
                             if attempt == 3:
                                 continue
                             await asyncio.sleep(2)
                             continue
 
                         last_price = price_data['LAST']
-                        # Проверяем наличие объёма торгов
                         volume = price_data.get('VOLUME', 0)
                         logger.info(f"Получены данные для {ticker}: цена={last_price}, объём={volume}")
-
-                        # Получаем информацию об акции
-                        stock_info = stock.info
-                        stock_name = stock_info.get('SHORTNAME', ticker) if isinstance(stock_info, dict) else getattr(stock_info, 'shortName', ticker)
 
                         # Обновляем или создаём запись
                         result = await db.execute(select(Stock).where(Stock.ticker == ticker))
