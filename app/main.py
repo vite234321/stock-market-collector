@@ -9,6 +9,7 @@ from sqlalchemy import select, update
 from aiogram import Bot
 from .database import async_session
 from .models import Stock, Signal, Subscription
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -18,7 +19,8 @@ app = FastAPI()
 
 # Инициализация Telegram-бота
 logger.info("Инициализация Telegram-бота...")
-bot = Bot(token="BOT_TOKEN")  # Замени на свой токен
+import os
+bot = Bot(token=os.getenv("BOT_TOKEN"))
 logger.info("Telegram-бот успешно инициализирован.")
 
 # Список тикеров для обработки
