@@ -3,24 +3,29 @@ import logging
 from datetime import datetime
 import httpx
 from fastapi import FastAPI, Depends
+from contextlib import asynccontextmanager
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from moexalgo import Ticker
 from sqlalchemy import select, update
 from aiogram import Bot
-from .database import async_session
-from .models import Stock, Signal, Subscription
+from .database import async_session  # Возвращаем относительный импорт
+from .models import Stock, Signal, Subscription  # Относительный импорт
+from dotenv import load_dotenv
 import os
+
+# Загружаем переменные окружения
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI()
-
 # Инициализация Telegram-бота
 logger.info("Инициализация Telegram-бота...")
-import os
-bot = Bot(token=os.getenv("BOT_TOKEN"))
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN не установлен")
+bot = Bot(token=BOT_TOKEN)
 logger.info("Telegram-бот успешно инициализирован.")
 
 # Список тикеров для обработки
@@ -41,16 +46,9 @@ async def fetch_tickers():
         logger.info("Используем резервный список тикеров.")
         return ["SBER.ME", "GAZP.ME", "LKOH.ME", "YNDX.ME", "ROSN.ME"]
 
-# Инициализация списка тикеров
-logger.info("Получение списка всех тикеров с MOEX...")
-loop = asyncio.get_event_loop()
-TICKERS = loop.run_until_complete(fetch_tickers())
-logger.info(f"Итоговый список тикеров: {TICKERS[:5]}...")
-
-# Функция для анализа аномалий (заглушка, можно заменить реальной логикой)
+# Функция для анализа аномалий
 async def detect_anomalies_for_ticker(ticker: str, last_price: float, volume: int, db: 'AsyncSession') -> dict:
     try:
-        # Пример: если цена выросла более чем на 5% по сравнению с предыдущей, генерируем сигнал
         result = await db.execute(select(Stock).where(Stock.ticker == ticker))
         stock = result.scalars().first()
         if stock and last_price > stock.last_price * 1.05:
@@ -61,8 +59,8 @@ async def detect_anomalies_for_ticker(ticker: str, last_price: float, volume: in
         return None
 
 # Основная функция для сбора данных
-async def collect_stock_data():
-    logger.info(f"Начало сбора данных для {len(TICKERS)} тикеров")
+async def collect_stock_data(tickers):
+    logger.info(f"Начало сбора данных для {len(tickers)} тикеров")
     try:
         async with httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(retries=3)) as client:
             logger.info("HTTP-клиент успешно инициализирован.")
@@ -73,7 +71,7 @@ async def collect_stock_data():
                 test_result = test_query.scalars().all()
                 logger.info(f"Тестовый запрос выполнен. Найдено записей в таблице stocks: {len(test_result)}")
                 
-                for ticker in TICKERS:
+                for ticker in tickers:
                     logger.info(f"Обработка тикера: {ticker}")
                     for attempt in range(1, 4):
                         try:
@@ -184,22 +182,29 @@ async def collect_stock_data():
 
 # Планировщик для периодического сбора данных
 scheduler = AsyncIOScheduler()
+TICKERS = []  # Инициализируем пустой список
 
-@app.on_event("startup")
-async def startup_event():
+# Используем lifespan вместо устаревшего on_event
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global TICKERS
     logger.info("Запуск коллектора...")
-    # Немедленный запуск сбора данных
+    logger.info("Получение списка всех тикеров с MOEX...")
+    TICKERS = await fetch_tickers()
+    logger.info(f"Итоговый список тикеров: {TICKERS[:5]}...")
     logger.info("Запуск немедленного сбора данных...")
-    await collect_stock_data()
-    # Планируем периодический сбор данных каждые 10 минут
-    scheduler.add_job(collect_stock_data, "interval", minutes=10)
+    await collect_stock_data(TICKERS)
+    scheduler.add_job(collect_stock_data, "interval", minutes=10, args=[TICKERS])
     logger.info("Запуск цикла для периодического сбора данных...")
     scheduler.start()
 
-@app.on_event("shutdown")
-async def shutdown_event():
+    yield
+
     logger.info("Завершение работы коллектора...")
     scheduler.shutdown()
+
+# Передаём lifespan в FastAPI
+app = FastAPI(lifespan=lifespan)
 
 @app.get("/health")
 async def health_check():
