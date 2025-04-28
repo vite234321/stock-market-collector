@@ -14,9 +14,11 @@ if not DATABASE_URL:
     raise ValueError("DATABASE_URL не установлен")
 logger.info(f"Исходный DATABASE_URL: {DATABASE_URL}")
 
-# Заменяем схему postgres:// на postgresql+psycopg://
+# Заменяем схему postgres:// или postgresql+asyncpg:// на postgresql+psycopg://
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg://")
+elif DATABASE_URL.startswith("postgresql+asyncpg://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql+asyncpg://", "postgresql+psycopg://")
 logger.info(f"Обновлённый DATABASE_URL: {DATABASE_URL}")
 
 # Создаём движок SQLAlchemy
