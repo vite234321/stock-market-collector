@@ -1,82 +1,69 @@
+import asyncio
 import logging
+from datetime import datetime
+import httpx
+from fastapi import FastAPI, Depends
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from moexalgo import Ticker
+from sqlalchemy import select, update
+from aiogram import Bot
+from .database import async_session
+from .models import Stock, Signal, Subscription
+
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-logger.info("Файл app/main.py импортирован. Начало выполнения.")
-
-from fastapi import FastAPI, Depends, HTTPException
-import asyncio
-import os
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.sql import select, update
-from .database import get_db
-from .models import Stock, Signal, Subscription
-from .anomaly_detector import detect_anomalies_for_ticker
-from datetime import datetime
-from moexalgo import Market, Ticker
-import httpx
-from aiogram import Bot
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
-from .database import async_session
-
-logger.info("Импорт всех зависимостей завершён.")
 
 app = FastAPI()
 
+# Инициализация Telegram-бота
 logger.info("Инициализация Telegram-бота...")
-bot = Bot(
-    token=os.getenv("BOT_TOKEN"),
-    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
-)
+bot = Bot(token="YOUR_TELEGRAM_BOT_TOKEN")  # Замени на свой токен
 logger.info("Telegram-бот успешно инициализирован.")
 
-# Получаем список всех тикеров с MOEX
-logger.info("Получение списка всех тикеров с MOEX...")
-try:
-    market = Market('stocks')
-    tickers_df = market.tickers()
-    TICKERS = [f"{ticker}.ME" for ticker in tickers_df['SECID'].tolist()]
-    logger.info(f"Получено {len(TICKERS)} тикеров: {TICKERS[:5]}...")  # Первые 5 для примера
-except Exception as e:
-    logger.error(f"Ошибка получения списка тикеров с MOEX: {e}")
-    TICKERS = ["SBER.ME", "GAZP.ME", "LKOH.ME", "YNDX.ME", "ROSN.ME"]
-    logger.info("Используем резервный список тикеров.")
+# Список тикеров для обработки
+async def fetch_tickers():
+    try:
+        async with httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(retries=3)) as client:
+            response = await client.get("https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/securities.json")
+            data = response.json()
+            if "securities" not in data or "data" not in data["securities"]:
+                raise KeyError("Неверная структура ответа от MOEX")
+            columns = data["securities"]["columns"]
+            secid_index = columns.index("SECID")  # Проверяем, есть ли SECID в колонках
+            tickers = [f"{row[secid_index]}.ME" for row in data["securities"]["data"] if row[secid_index]]
+            logger.info(f"Получено {len(tickers)} тикеров: {tickers[:5]}...")
+            return tickers
+    except Exception as e:
+        logger.error(f"Ошибка получения списка тикеров с MOEX: {e}")
+        logger.info("Используем резервный список тикеров.")
+        return ["SBER.ME", "GAZP.ME", "LKOH.ME", "YNDX.ME", "ROSN.ME"]
 
+# Инициализация списка тикеров
+logger.info("Получение списка всех тикеров с MOEX...")
+loop = asyncio.get_event_loop()
+TICKERS = loop.run_until_complete(fetch_tickers())
 logger.info(f"Итоговый список тикеров: {TICKERS[:5]}...")
 
-@app.on_event("startup")
-async def startup_event():
-    logger.info("Запуск коллектора...")
-    logger.info("Запуск немедленного сбора данных...")
+# Функция для анализа аномалий (заглушка, можно заменить реальной логикой)
+async def detect_anomalies_for_ticker(ticker: str, last_price: float, volume: int, db: 'AsyncSession') -> dict:
     try:
-        await collect_stock_data()
+        # Пример: если цена выросла более чем на 5% по сравнению с предыдущей, генерируем сигнал
+        result = await db.execute(select(Stock).where(Stock.ticker == ticker))
+        stock = result.scalars().first()
+        if stock and last_price > stock.last_price * 1.05:
+            return {"type": "рост цены", "value": last_price}
+        return None
     except Exception as e:
-        logger.error(f"Ошибка при выполнении collect_stock_data на старте: {e}")
-    logger.info("Запуск цикла для периодического сбора данных...")
-    asyncio.create_task(run_collector())
+        logger.error(f"Ошибка анализа аномалий для {ticker}: {e}")
+        return None
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    logger.info("Завершение работы коллектора...")
-    await bot.session.close()
-
-async def run_collector():
-    while True:
-        logger.info("Начало циклического сбора данных...")
-        try:
-            await collect_stock_data()
-        except Exception as e:
-            logger.error(f"Ошибка при выполнении collect_stock_data в цикле: {e}")
-        logger.info("Ожидание 10 минут перед следующим сбором данных...")
-        await asyncio.sleep(600)  # 10 минут
-
-# Обновим функцию collect_stock_data
+# Основная функция для сбора данных
 async def collect_stock_data():
     logger.info(f"Начало сбора данных для {len(TICKERS)} тикеров")
     try:
         async with httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(retries=3)) as client:
             logger.info("HTTP-клиент успешно инициализирован.")
-            # Используем async_session напрямую
             async with async_session() as db:
                 logger.info("Подключение к базе данных успешно установлено.")
                 logger.info("Проверка состояния базы данных: выполнение тестового запроса...")
@@ -88,13 +75,13 @@ async def collect_stock_data():
                     logger.info(f"Обработка тикера: {ticker}")
                     for attempt in range(1, 4):
                         try:
-                            stock = Ticker(ticker.replace(".ME", ""), market=Market('stocks'))
+                            stock = Ticker(ticker.replace(".ME", ""), session='TQBR')
                             logger.info(f"Объект Ticker для {ticker} создан.")
                             
                             logger.info(f"Попытка {attempt}: получение информации об акции {ticker}")
-                            stock_info = stock.info
+                            stock_info = stock.info()
                             logger.info(f"Информация об акции {ticker}: {stock_info}")
-                            stock_name = stock_info.get('SHORTNAME', ticker) if isinstance(stock_info, dict) else getattr(stock_info, 'shortName', ticker)
+                            stock_name = stock_info.get('SHORTNAME', ticker) if isinstance(stock_info, dict) else getattr(stock_info, 'SHORTNAME', ticker)
                             logger.info(f"Имя акции для {ticker}: {stock_name}")
 
                             logger.info(f"Попытка {attempt}: получение ценовых данных для {ticker}")
@@ -193,27 +180,25 @@ async def collect_stock_data():
     finally:
         logger.info("Сбор данных завершён")
 
-@app.get("/stocks")
-async def get_stocks(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Stock))
-    return result.scalars().all()
+# Планировщик для периодического сбора данных
+scheduler = AsyncIOScheduler()
 
-@app.get("/stocks/{ticker}")
-async def get_stock(ticker: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Stock).where(Stock.ticker == ticker))
-    stock = result.scalars().first()
-    if not stock:
-        raise HTTPException(status_code=404, detail="Stock not found")
-    return stock
+@app.on_event("startup")
+async def startup_event():
+    logger.info("Запуск коллектора...")
+    # Немедленный запуск сбора данных
+    logger.info("Запуск немедленного сбора данных...")
+    await collect_stock_data()
+    # Планируем периодический сбор данных каждые 10 минут
+    scheduler.add_job(collect_stock_data, "interval", minutes=10)
+    logger.info("Запуск цикла для периодического сбора данных...")
+    scheduler.start()
 
-@app.get("/signals")
-async def get_signals(ticker: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Signal).where(Signal.ticker == ticker))
-    signals = result.scalars().all()
-    if not signals:
-        raise HTTPException(status_code=404, detail="No signals found")
-    return signals
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("Завершение работы коллектора...")
+    scheduler.shutdown()
 
 @app.get("/health")
 async def health_check():
-    return {"status": "Collector is running"}
+    return {"status": "healthy"}

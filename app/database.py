@@ -26,7 +26,10 @@ try:
         echo=True,  # Включаем отладку SQL-запросов
         pool_size=5,
         max_overflow=10,
-        connect_args={"server_settings": {"application_name": "stock-market-collector"}}
+        connect_args={
+            "server_settings": {"application_name": "stock-market-collector"},
+            "statement_cache_size": 0  # Отключаем кэш подготовленных выражений
+        }
     )
     logger.info("Движок SQLAlchemy для коннектора создан успешно")
 except Exception as e:
