@@ -17,6 +17,7 @@ import httpx
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from .database import async_session
 
 logger.info("Импорт всех зависимостей завершён.")
 
@@ -69,128 +70,128 @@ async def run_collector():
         logger.info("Ожидание 10 минут перед следующим сбором данных...")
         await asyncio.sleep(600)  # 10 минут
 
+# Обновим функцию collect_stock_data
 async def collect_stock_data():
     logger.info(f"Начало сбора данных для {len(TICKERS)} тикеров")
     try:
         async with httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(retries=3)) as client:
             logger.info("HTTP-клиент успешно инициализирован.")
-            try:
-                async with get_db() as db:
-                    logger.info("Подключение к базе данных успешно установлено.")
-                    logger.info("Проверка состояния базы данных: выполнение тестового запроса...")
-                    test_query = await db.execute(select(Stock))
-                    test_result = test_query.scalars().all()
-                    logger.info(f"Тестовый запрос выполнен. Найдено записей в таблице stocks: {len(test_result)}")
-                    
-                    for ticker in TICKERS:
-                        logger.info(f"Обработка тикера: {ticker}")
-                        for attempt in range(1, 4):
-                            try:
-                                stock = Ticker(ticker.replace(".ME", ""), market=Market('stocks'))
-                                logger.info(f"Объект Ticker для {ticker} создан.")
-                                
-                                logger.info(f"Попытка {attempt}: получение информации об акции {ticker}")
-                                stock_info = stock.info
-                                logger.info(f"Информация об акции {ticker}: {stock_info}")
-                                stock_name = stock_info.get('SHORTNAME', ticker) if isinstance(stock_info, dict) else getattr(stock_info, 'shortName', ticker)
-                                logger.info(f"Имя акции для {ticker}: {stock_name}")
+            # Используем async_session напрямую
+            async with async_session() as db:
+                logger.info("Подключение к базе данных успешно установлено.")
+                logger.info("Проверка состояния базы данных: выполнение тестового запроса...")
+                test_query = await db.execute(select(Stock))
+                test_result = test_query.scalars().all()
+                logger.info(f"Тестовый запрос выполнен. Найдено записей в таблице stocks: {len(test_result)}")
+                
+                for ticker in TICKERS:
+                    logger.info(f"Обработка тикера: {ticker}")
+                    for attempt in range(1, 4):
+                        try:
+                            stock = Ticker(ticker.replace(".ME", ""), market=Market('stocks'))
+                            logger.info(f"Объект Ticker для {ticker} создан.")
+                            
+                            logger.info(f"Попытка {attempt}: получение информации об акции {ticker}")
+                            stock_info = stock.info
+                            logger.info(f"Информация об акции {ticker}: {stock_info}")
+                            stock_name = stock_info.get('SHORTNAME', ticker) if isinstance(stock_info, dict) else getattr(stock_info, 'shortName', ticker)
+                            logger.info(f"Имя акции для {ticker}: {stock_name}")
 
-                                logger.info(f"Попытка {attempt}: получение ценовых данных для {ticker}")
-                                price_data = stock.price_info()
-                                logger.info(f"Ценовые данные для {ticker}: {price_data}")
-                                if not price_data or 'LAST' not in price_data:
-                                    logger.warning(f"Нет ценовых данных для {ticker} на попытке {attempt}")
-                                    if attempt == 3:
-                                        logger.error(f"Не удалось получить ценовые данные для {ticker} после 3 попыток.")
-                                        continue
-                                    await asyncio.sleep(2)
-                                    continue
-
-                                last_price = price_data['LAST']
-                                volume = price_data.get('VOLUME', 0)
-                                logger.info(f"Получены данные для {ticker}: цена={last_price}, объём={volume}")
-
-                                logger.info(f"Поиск записи для {ticker} в базе данных...")
-                                result = await db.execute(select(Stock).where(Stock.ticker == ticker))
-                                stock_entry = result.scalars().first()
-                                logger.info(f"Результат поиска: {stock_entry}")
-                                if stock_entry:
-                                    logger.info(f"Запись для {ticker} найдена, обновляем...")
-                                    update_query = update(Stock).where(Stock.ticker == ticker).values(
-                                        last_price=last_price,
-                                        volume=volume,
-                                        updated_at=datetime.utcnow()
-                                    )
-                                    logger.info(f"Выполнение запроса на обновление: {update_query}")
-                                    await db.execute(update_query)
-                                    logger.info(f"Запись для {ticker} обновлена: цена={last_price}, объём={volume}")
-                                else:
-                                    logger.info(f"Запись для {ticker} не найдена, создаём новую...")
-                                    new_stock = Stock(
-                                        ticker=ticker,
-                                        name=stock_name,
-                                        last_price=last_price,
-                                        volume=volume
-                                    )
-                                    logger.info(f"Добавление новой записи: {new_stock.__dict__}")
-                                    db.add(new_stock)
-                                    logger.info(f"Новая запись для {ticker} создана: цена={last_price}, объём={volume}")
-                                logger.info(f"Сохранение изменений для {ticker} в базе данных...")
-                                await db.commit()
-                                logger.info(f"Коммит изменений для {ticker} выполнен.")
-
-                                # Анализ аномалий
-                                try:
-                                    logger.info(f"Запуск анализа аномалий для {ticker}...")
-                                    signal = await detect_anomalies_for_ticker(ticker, last_price, volume, db)
-                                    if signal:
-                                        new_signal = Signal(
-                                            ticker=ticker,
-                                            signal_type=signal["type"],
-                                            value=signal["value"],
-                                            created_at=datetime.utcnow()
-                                        )
-                                        db.add(new_signal)
-                                        await db.commit()
-                                        logger.info(f"Сохранён сигнал для {ticker}: {signal}")
-
-                                        logger.info(f"Отправка сигнала для {ticker} в stock-market-bot...")
-                                        await client.post("https://stock-market-bot.herokuapp.com/signals", json={
-                                            "ticker": ticker,
-                                            "signal_type": signal["type"],
-                                            "value": signal["value"]
-                                        })
-                                        logger.info(f"Сигнал отправлен в stock-market-bot для {ticker}")
-
-                                        logger.info(f"Поиск подписчиков для {ticker}...")
-                                        subscriptions = await db.execute(
-                                            select(Subscription).where(Subscription.ticker == ticker)
-                                        )
-                                        subscriptions = subscriptions.scalars().all()
-                                        logger.info(f"Найдено {len(subscriptions)} подписчиков для {ticker}")
-                                        for sub in subscriptions:
-                                            try:
-                                                await bot.send_message(
-                                                    chat_id=sub.user_id,
-                                                    text=f"📈 Акция <b>{ticker}</b> ({stock_name}): {signal['type']}! Текущая цена: {signal['value']} RUB"
-                                                )
-                                                logger.info(f"Уведомление отправлено пользователю {sub.user_id}")
-                                            except Exception as e:
-                                                logger.error(f"Ошибка отправки уведомления пользователю {sub.user_id}: {e}")
-                                except Exception as e:
-                                    logger.error(f"Ошибка анализа аномалий для {ticker}: {e}")
-                                break
-                            except Exception as e:
-                                logger.warning(f"Ошибка получения данных для {ticker} на попытке {attempt}: {e}")
+                            logger.info(f"Попытка {attempt}: получение ценовых данных для {ticker}")
+                            price_data = stock.price_info()
+                            logger.info(f"Ценовые данные для {ticker}: {price_data}")
+                            if not price_data or 'LAST' not in price_data:
+                                logger.warning(f"Нет ценовых данных для {ticker} на попытке {attempt}")
                                 if attempt == 3:
-                                    logger.error(f"Не удалось обработать {ticker} после 3 попыток: {e}")
-                                    break
+                                    logger.error(f"Не удалось получить ценовые данные для {ticker} после 3 попыток.")
+                                    continue
                                 await asyncio.sleep(2)
-            except Exception as e:
-                logger.error(f"Ошибка подключения к базе данных: {e}")
+                                continue
+
+                            last_price = price_data['LAST']
+                            volume = price_data.get('VOLUME', 0)
+                            logger.info(f"Получены данные для {ticker}: цена={last_price}, объём={volume}")
+
+                            logger.info(f"Поиск записи для {ticker} в базе данных...")
+                            result = await db.execute(select(Stock).where(Stock.ticker == ticker))
+                            stock_entry = result.scalars().first()
+                            logger.info(f"Результат поиска: {stock_entry}")
+                            if stock_entry:
+                                logger.info(f"Запись для {ticker} найдена, обновляем...")
+                                update_query = update(Stock).where(Stock.ticker == ticker).values(
+                                    last_price=last_price,
+                                    volume=volume,
+                                    updated_at=datetime.utcnow()
+                                )
+                                logger.info(f"Выполнение запроса на обновление: {update_query}")
+                                await db.execute(update_query)
+                                logger.info(f"Запись для {ticker} обновлена: цена={last_price}, объём={volume}")
+                            else:
+                                logger.info(f"Запись для {ticker} не найдена, создаём новую...")
+                                new_stock = Stock(
+                                    ticker=ticker,
+                                    name=stock_name,
+                                    last_price=last_price,
+                                    volume=volume
+                                )
+                                logger.info(f"Добавление новой записи: {new_stock.__dict__}")
+                                db.add(new_stock)
+                                logger.info(f"Новая запись для {ticker} создана: цена={last_price}, объём={volume}")
+                            logger.info(f"Сохранение изменений для {ticker} в базе данных...")
+                            await db.commit()
+                            logger.info(f"Коммит изменений для {ticker} выполнен.")
+
+                            # Анализ аномалий
+                            try:
+                                logger.info(f"Запуск анализа аномалий для {ticker}...")
+                                signal = await detect_anomalies_for_ticker(ticker, last_price, volume, db)
+                                if signal:
+                                    new_signal = Signal(
+                                        ticker=ticker,
+                                        signal_type=signal["type"],
+                                        value=signal["value"],
+                                        created_at=datetime.utcnow()
+                                    )
+                                    db.add(new_signal)
+                                    await db.commit()
+                                    logger.info(f"Сохранён сигнал для {ticker}: {signal}")
+
+                                    logger.info(f"Отправка сигнала для {ticker} в stock-market-bot...")
+                                    await client.post("https://stock-market-bot.herokuapp.com/signals", json={
+                                        "ticker": ticker,
+                                        "signal_type": signal["type"],
+                                        "value": signal["value"]
+                                    })
+                                    logger.info(f"Сигнал отправлен в stock-market-bot для {ticker}")
+
+                                    logger.info(f"Поиск подписчиков для {ticker}...")
+                                    subscriptions = await db.execute(
+                                        select(Subscription).where(Subscription.ticker == ticker)
+                                    )
+                                    subscriptions = subscriptions.scalars().all()
+                                    logger.info(f"Найдено {len(subscriptions)} подписчиков для {ticker}")
+                                    for sub in subscriptions:
+                                        try:
+                                            await bot.send_message(
+                                                chat_id=sub.user_id,
+                                                text=f"📈 Акция <b>{ticker}</b> ({stock_name}): {signal['type']}! Текущая цена: {signal['value']} RUB"
+                                            )
+                                            logger.info(f"Уведомление отправлено пользователю {sub.user_id}")
+                                        except Exception as e:
+                                            logger.error(f"Ошибка отправки уведомления пользователю {sub.user_id}: {e}")
+                            except Exception as e:
+                                logger.error(f"Ошибка анализа аномалий для {ticker}: {e}")
+                            break
+                        except Exception as e:
+                            logger.warning(f"Ошибка получения данных для {ticker} на попытке {attempt}: {e}")
+                            if attempt == 3:
+                                logger.error(f"Не удалось обработать {ticker} после 3 попыток: {e}")
+                                break
+                            await asyncio.sleep(2)
     except Exception as e:
         logger.error(f"Ошибка инициализации HTTP-клиента: {e}")
-    logger.info("Сбор данных завершён")
+    finally:
+        logger.info("Сбор данных завершён")
 
 @app.get("/stocks")
 async def get_stocks(db: AsyncSession = Depends(get_db)):
