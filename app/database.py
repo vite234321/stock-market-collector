@@ -2,7 +2,6 @@ import logging
 import os
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
-from asyncpg.pool import Pool
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -15,21 +14,17 @@ if not DATABASE_URL:
     raise ValueError("DATABASE_URL не установлен")
 logger.info(f"Исходный DATABASE_URL: {DATABASE_URL}")
 
-# Заменяем схему postgres:// на postgresql+asyncpg://
+# Заменяем схему postgres:// на postgresql+psycopg://
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg://")
 logger.info(f"Обновлённый DATABASE_URL: {DATABASE_URL}")
 
-# Создаём движок SQLAlchemy с параметрами для asyncpg
+# Создаём движок SQLAlchemy
 try:
     engine = create_async_engine(
         DATABASE_URL,
         echo=True,  # Включаем отладку SQL-запросов
-        pool_pre_ping=True,  # Проверяем соединения перед использованием
-        connect_args={
-            "server_settings": {"application_name": "stock-market-collector"},
-            "statement_cache_size": 0  # Отключаем кэш подготовленных выражений
-        }
+        pool_pre_ping=True  # Проверяем соединения перед использованием
     )
     logger.info("Движок SQLAlchemy для коннектора создан успешно")
 except Exception as e:

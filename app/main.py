@@ -58,7 +58,6 @@ async def detect_anomalies_for_ticker(ticker: str, last_price: float, volume: in
         logger.error(f"Ошибка анализа аномалий для {ticker}: {e}")
         return None
 
-# Основная функция для сбора данных
 async def collect_stock_data(tickers):
     logger.info(f"Начало сбора данных для {len(tickers)} тикеров")
     try:
@@ -75,7 +74,8 @@ async def collect_stock_data(tickers):
                     logger.info(f"Обработка тикера: {ticker}")
                     for attempt in range(1, 4):
                         try:
-                            stock = Ticker(ticker.replace(".ME", ""), session='TQBR')
+                            # Убираем аргумент session, работаем напрямую с тикером
+                            stock = Ticker(ticker.replace(".ME", ""))
                             logger.info(f"Объект Ticker для {ticker} создан.")
                             
                             logger.info(f"Попытка {attempt}: получение информации об акции {ticker}")
@@ -179,7 +179,6 @@ async def collect_stock_data(tickers):
         logger.error(f"Ошибка инициализации HTTP-клиента: {e}")
     finally:
         logger.info("Сбор данных завершён")
-
 # Планировщик для периодического сбора данных
 scheduler = AsyncIOScheduler()
 TICKERS = []  # Инициализируем пустой список
