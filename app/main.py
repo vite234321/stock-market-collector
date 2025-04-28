@@ -18,7 +18,7 @@ app = FastAPI()
 
 # Инициализация Telegram-бота
 logger.info("Инициализация Telegram-бота...")
-bot = Bot(token="YOUR_TELEGRAM_BOT_TOKEN")  # Замени на свой токен
+bot = Bot(token="BOT_TOKEN")  # Замени на свой токен
 logger.info("Telegram-бот успешно инициализирован.")
 
 # Список тикеров для обработки
