@@ -2,21 +2,22 @@ import logging
 import os
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
+from asyncpg.pool import Pool
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Получаем DATABASE_URL и заменяем схему для asyncpg
+from dotenv import load_dotenv
+load_dotenv()  # Загружаем переменные из .env
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
-    logger.error("Переменная окружения DATABASE_URL не установлена")
     raise ValueError("DATABASE_URL не установлен")
 logger.info(f"Исходный DATABASE_URL: {DATABASE_URL}")
 
 # Заменяем схему postgres:// на postgresql+asyncpg://
 if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://")
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg://")
 logger.info(f"Обновлённый DATABASE_URL: {DATABASE_URL}")
 
 # Создаём движок SQLAlchemy с параметрами для asyncpg
@@ -24,8 +25,7 @@ try:
     engine = create_async_engine(
         DATABASE_URL,
         echo=True,  # Включаем отладку SQL-запросов
-        pool_size=5,
-        max_overflow=10,
+        pool_pre_ping=True,  # Проверяем соединения перед использованием
         connect_args={
             "server_settings": {"application_name": "stock-market-collector"},
             "statement_cache_size": 0  # Отключаем кэш подготовленных выражений
