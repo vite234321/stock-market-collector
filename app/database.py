@@ -8,6 +8,10 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL не установлен в переменных окружения")
 
+# Преобразуем postgres:// в postgresql+asyncpg://
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
+
 # Создание асинхронного движка
 engine = create_async_engine(DATABASE_URL, echo=True)
 

@@ -9,8 +9,7 @@ from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select, update
 
-# Исправленный импорт: async_session из database.py, модели из models.py
-from .database import async_session
+from .database import async_session, init_db
 from .models import Stock, Signal, Subscription
 
 # Настройка логирования
@@ -197,6 +196,11 @@ async def main():
     global bot
     bot = Bot(token=TELEGRAM_TOKEN)
     logger.info("Telegram-бот успешно инициализирован.")
+
+    # Инициализация базы данных
+    logger.info("Инициализация базы данных...")
+    await init_db()
+    logger.info("База данных успешно инициализирована.")
 
     logger.info("Запуск коллектора...")
     tickers = await fetch_tickers()
