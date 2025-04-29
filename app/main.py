@@ -46,6 +46,42 @@ async def fetch_tickers():
         logger.info("Используем резервный список тикеров.")
         return ["SBER.ME", "GAZP.ME", "LKOH.ME", "YNDX.ME", "ROSN.ME"]
 
+# Альтернативный способ получения данных через прямой запрос к API MOEX
+async def fetch_stock_data_moex(ticker: str, client: httpx.AsyncClient):
+    try:
+        url = f"https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/securities/{ticker.replace('.ME', '')}.json"
+        response = await client.get(url)
+        data = response.json()
+        securities_data = data.get('securities', {}).get('data', [])
+        marketdata = data.get('marketdata', {}).get('data', [])
+        
+        stock_name = None
+        last_price = None
+        volume = 0
+        
+        # Получаем имя акции из securities
+        if securities_data:
+            columns = data['securities']['columns']
+            shortname_idx = columns.index('SHORTNAME')
+            stock_name = securities_data[0][shortname_idx]
+        
+        # Получаем цену и объём из marketdata
+        if marketdata:
+            columns = data['marketdata']['columns']
+            last_idx = columns.index('LAST')
+            volume_idx = columns.index('VOLUME')
+            last_price = marketdata[0][last_idx]
+            volume = marketdata[0][volume_idx] if volume_idx < len(marketdata[0]) else 0
+
+        if last_price is None:
+            logger.warning(f"Не удалось получить цену для {ticker} через прямой запрос")
+            return None, None, None
+        
+        return stock_name or ticker, last_price, volume
+    except Exception as e:
+        logger.error(f"Ошибка прямого запроса к API MOEX для {ticker}: {e}")
+        return None, None, None
+
 # Функция для анализа аномалий
 async def detect_anomalies_for_ticker(ticker: str, last_price: float, volume: int, db: 'AsyncSession') -> dict:
     try:
@@ -74,31 +110,37 @@ async def collect_stock_data(tickers):
                     logger.info(f"Обработка тикера: {ticker}")
                     for attempt in range(1, 4):
                         try:
-                            # Убираем аргумент session, работаем напрямую с тикером
+                            # Пробуем получить данные через moexalgo
                             stock = Ticker(ticker.replace(".ME", ""))
                             logger.info(f"Объект Ticker для {ticker} создан.")
                             
                             logger.info(f"Попытка {attempt}: получение информации об акции {ticker}")
-                            stock_info = stock.info()
+                            stock_info = stock.get()  # Заменили stock.info() на stock.get()
                             logger.info(f"Информация об акции {ticker}: {stock_info}")
                             stock_name = stock_info.get('SHORTNAME', ticker) if isinstance(stock_info, dict) else getattr(stock_info, 'SHORTNAME', ticker)
                             logger.info(f"Имя акции для {ticker}: {stock_name}")
 
                             logger.info(f"Попытка {attempt}: получение ценовых данных для {ticker}")
-                            price_data = stock.price_info()
+                            price_data = stock.marketdata()  # Заменили stock.price_info() на stock.marketdata()
                             logger.info(f"Ценовые данные для {ticker}: {price_data}")
                             if not price_data or 'LAST' not in price_data:
-                                logger.warning(f"Нет ценовых данных для {ticker} на попытке {attempt}")
-                                if attempt == 3:
-                                    logger.error(f"Не удалось получить ценовые данные для {ticker} после 3 попыток.")
+                                logger.warning(f"Нет ценовых данных для {ticker} через moexalgo на попытке {attempt}")
+                                # Пробуем прямой запрос к API MOEX
+                                logger.info(f"Попытка {attempt}: прямой запрос к API MOEX для {ticker}")
+                                stock_name, last_price, volume = await fetch_stock_data_moex(ticker, client)
+                                if last_price is None:
+                                    if attempt == 3:
+                                        logger.error(f"Не удалось получить ценовые данные для {ticker} после 3 попыток.")
+                                        break
+                                    await asyncio.sleep(2)
                                     continue
-                                await asyncio.sleep(2)
-                                continue
+                            else:
+                                last_price = price_data['LAST']
+                                volume = price_data.get('VOLUME', 0)
 
-                            last_price = price_data['LAST']
-                            volume = price_data.get('VOLUME', 0)
                             logger.info(f"Получены данные для {ticker}: цена={last_price}, объём={volume}")
 
+                            # Работа с базой данных
                             logger.info(f"Поиск записи для {ticker} в базе данных...")
                             result = await db.execute(select(Stock).where(Stock.ticker == ticker))
                             stock_entry = result.scalars().first()
@@ -179,6 +221,7 @@ async def collect_stock_data(tickers):
         logger.error(f"Ошибка инициализации HTTP-клиента: {e}")
     finally:
         logger.info("Сбор данных завершён")
+
 # Планировщик для периодического сбора данных
 scheduler = AsyncIOScheduler()
 TICKERS = []  # Инициализируем пустой список
