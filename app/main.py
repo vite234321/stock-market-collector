@@ -154,7 +154,6 @@ async def collect_stock_data(tickers):
                                 logger.info(f"Добавление новой записи: {new_stock.__dict__}")
                                 db.add(new_stock)
                                 logger.info(f"Новая запись для {ticker} создана: цена={last_price}, объём={volume}")
-                            logger.info(f"Сохранение изменений для {ticker} в базе данных...")
                             await db.commit()
                             logger.info(f"Коммит изменений для {ticker} выполнен.")
 
@@ -198,13 +197,16 @@ async def collect_stock_data(tickers):
                                             logger.error(f"Ошибка отправки уведомления пользователю {sub.user_id}: {e}")
                             except Exception as e:
                                 logger.error(f"Ошибка анализа аномалий для {ticker}: {e}")
+                                await db.rollback()  # Откатываем транзакцию при ошибке
                             break
                         except Exception as e:
                             logger.warning(f"Ошибка получения данных для {ticker} на попытке {attempt}: {e}")
                             if attempt == 3:
                                 logger.error(f"Не удалось обработать {ticker} после 3 попыток: {e}")
+                                await db.rollback()  # Откатываем транзакцию, если все попытки провалились
                                 break
                             await asyncio.sleep(2)
+                            await db.rollback()  # Откатываем транзакцию перед следующей попыткой
     except Exception as e:
         logger.error(f"Ошибка инициализации HTTP-клиента: {e}")
     finally:
