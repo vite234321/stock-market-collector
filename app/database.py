@@ -1,35 +1,27 @@
 # app/database.py
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
 import os
-import logging
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker, declarative_base
 
-# Настройка логирования
-logger = logging.getLogger(__name__)
+# Получение строки подключения из переменной окружения
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL не установлен в переменных окружения")
 
-# Определяем Base для ORM
+# Создание асинхронного движка
+engine = create_async_engine(DATABASE_URL, echo=True)
+
+# Создание фабрики сессий
+async_session = sessionmaker(
+    engine,
+    class_=AsyncSession,
+    expire_on_commit=False
+)
+
+# Базовый класс для моделей SQLAlchemy
 Base = declarative_base()
 
-# Получаем строку подключения из переменной окружения
-DATABASE_URL = os.getenv("DATABASE_URL")
-logger.info(f"Исходный DATABASE_URL: {DATABASE_URL}")
-
-# Supabase использует формат postgres://, заменяем его на postgresql+asyncpg://
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
-
-logger.info(f"Обновлённый DATABASE_URL: {DATABASE_URL}")
-
-# Создаём асинхронный движок с отключением кэширования подготовленных выражений
-try:
-    engine = create_async_engine(
-        DATABASE_URL,
-        echo=True,
-        connect_args={"statement_cache_size": 0}  # Отключаем кэш подготовленных выражений
-    )
-except Exception as e:
-    logger.error(f"Ошибка создания движка SQLAlchemy: {str(e)}")
-    raise
-
-# Создаём фабрику сессий
-async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+# Функция для инициализации базы данных (создание таблиц)
+async def init_db():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
