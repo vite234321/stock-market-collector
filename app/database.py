@@ -5,7 +5,7 @@ import logging
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-# Настройка логирования (исправляем формат)
+# Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -17,7 +17,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL не установлен в переменных окружения")
 
-# Преобразуем postgres:// или postgresql+asyncpg:// на postgresql+psycopg://
+# Преобразуем postgresql:// на postgresql+psycopg://
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg://", 1)
 elif DATABASE_URL.startswith("postgresql+asyncpg://"):
@@ -31,7 +31,7 @@ try:
         DATABASE_URL,
         echo=True,
         pool_pre_ping=True,  # Проверяем соединения перед использованием
-        connect_args={"timeout": 30}  # Увеличиваем тайм-аут до 30 секунд
+        connect_args={"connect_timeout": 30}  # Используем connect_timeout
     )
     logger.info("Движок SQLAlchemy для коннектора создан успешно")
 except Exception as e:
