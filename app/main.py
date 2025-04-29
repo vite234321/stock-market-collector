@@ -187,8 +187,8 @@ async def collect_stock_data(tickers):
                 logger.error("Не удалось инициализировать HTTP-клиент после 5 попыток. Прекращаем сбор данных.")
                 break
             await asyncio.sleep(5)
-    finally:
-        logger.info("Сбор данных завершён")
+        finally:
+            logger.info("Сбор данных завершён")
 
 # Основная функция для запуска приложения
 async def main():
