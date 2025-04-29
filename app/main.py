@@ -89,7 +89,7 @@ async def fetch_stock_data_moex(ticker: str, client: httpx.AsyncClient):
         return None, None, None
 
 # Функция для анализа аномалий
-async def detect_anomalies_for_ticker(ticker: str, last_price: float, volume: int, db: 'AsyncSession') -> dict:
+async def detect_anomalies_for_ticker(ticker: str, last_price: float, volume: float, db: 'AsyncSession') -> dict:
     try:
         result = await db.execute(select(Stock).where(Stock.ticker == ticker))
         stock = result.scalars().first()
@@ -135,9 +135,7 @@ async def collect_stock_data(tickers):
                             if stock_entry:
                                 logger.info(f"Запись для {ticker} найдена, обновляем...")
                                 await db.execute(
-                                    update(Stock)
-                                    .where(Stock.ticker == ticker)
-                                    .values(
+                                    update(Stock).where(Stock.ticker == ticker).values(
                                         last_price=last_price,
                                         volume=volume,
                                         updated_at=datetime.utcnow()
@@ -151,11 +149,12 @@ async def collect_stock_data(tickers):
                                     name=stock_name,
                                     last_price=last_price,
                                     volume=volume,
-                                    updated_at=datetime.utcnow()  # Добавляем updated_at
+                                    updated_at=datetime.utcnow()
                                 )
                                 logger.info(f"Добавление новой записи: {new_stock.__dict__}")
                                 db.add(new_stock)
                                 logger.info(f"Новая запись для {ticker} создана: цена={last_price}, объём={volume}")
+                            logger.info(f"Сохранение изменений для {ticker} в базе данных...")
                             await db.commit()
                             logger.info(f"Коммит изменений для {ticker} выполнен.")
 
@@ -199,21 +198,13 @@ async def collect_stock_data(tickers):
                                             logger.error(f"Ошибка отправки уведомления пользователю {sub.user_id}: {e}")
                             except Exception as e:
                                 logger.error(f"Ошибка анализа аномалий для {ticker}: {e}")
-                                await db.rollback()  # Откатываем транзакцию при ошибке
                             break
                         except Exception as e:
                             logger.warning(f"Ошибка получения данных для {ticker} на попытке {attempt}: {e}")
                             if attempt == 3:
                                 logger.error(f"Не удалось обработать {ticker} после 3 попыток: {e}")
-                                await db.rollback()  # Откатываем транзакцию, если все попытки провалились
                                 break
                             await asyncio.sleep(2)
-                    finally:
-                        # В любом случае откатываем транзакцию, если она осталась открытой
-                        try:
-                            await db.rollback()
-                        except Exception as e:
-                            logger.error(f"Ошибка при откате транзакции для {ticker}: {e}")
     except Exception as e:
         logger.error(f"Ошибка инициализации HTTP-клиента: {e}")
     finally:
@@ -223,6 +214,7 @@ async def collect_stock_data(tickers):
 scheduler = AsyncIOScheduler()
 TICKERS = []  # Инициализируем пустой список
 
+# Используем lifespan вместо устаревшего on_event
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global TICKERS
@@ -241,6 +233,7 @@ async def lifespan(app: FastAPI):
     logger.info("Завершение работы коллектора...")
     scheduler.shutdown()
 
+# Передаём lifespan в FastAPI
 app = FastAPI(lifespan=lifespan)
 
 @app.get("/health")
