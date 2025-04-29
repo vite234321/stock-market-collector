@@ -20,9 +20,13 @@ if DATABASE_URL.startswith("postgres://"):
 
 logger.info(f"Обновлённый DATABASE_URL: {DATABASE_URL}")
 
-# Создаём асинхронный движок
+# Создаём асинхронный движок с отключением кэширования подготовленных выражений
 try:
-    engine = create_async_engine(DATABASE_URL, echo=True)
+    engine = create_async_engine(
+        DATABASE_URL,
+        echo=True,
+        connect_args={"statement_cache_size": 0}  # Отключаем кэш подготовленных выражений
+    )
 except Exception as e:
     logger.error(f"Ошибка создания движка SQLAlchemy: {str(e)}")
     raise
