@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 logger = logging.getLogger(__name__)
 
 # Инициализация Telegram-бота
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # Изменили TELEGRAM_TOKEN на BOT_TOKEN
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не установлен в переменных окружения")
 bot = Bot(token=BOT_TOKEN)
@@ -194,13 +194,17 @@ async def collect_stock_data(tickers):
 async def main():
     logger.info("Инициализация Telegram-бота...")
     global bot
-    bot = Bot(token=BOT_TOKEN)  # Изменили TELEGRAM_TOKEN на BOT_TOKEN
+    bot = Bot(token=BOT_TOKEN)
     logger.info("Telegram-бот успешно инициализирован.")
 
     # Инициализация базы данных
     logger.info("Инициализация базы данных...")
-    await init_db()
-    logger.info("База данных успешно инициализирована.")
+    try:
+        await init_db()
+        logger.info("База данных успешно инициализирована.")
+    except Exception as e:
+        logger.error(f"Не удалось инициализировать базу данных: {e}")
+        logger.warning("Продолжаем работу без базы данных. Некоторые функции могут быть недоступны.")
 
     logger.info("Запуск коллектора...")
     tickers = await fetch_tickers()
