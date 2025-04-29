@@ -17,10 +17,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 logger = logging.getLogger(__name__)
 
 # Инициализация Telegram-бота
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-if not TELEGRAM_TOKEN:
-    raise ValueError("TELEGRAM_TOKEN не установлен в переменных окружения")
-bot = Bot(token=TELEGRAM_TOKEN)
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # Изменили TELEGRAM_TOKEN на BOT_TOKEN
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN не установлен в переменных окружения")
+bot = Bot(token=BOT_TOKEN)
 
 # Функция для получения тикеров с MOEX
 async def fetch_tickers():
@@ -187,14 +187,14 @@ async def collect_stock_data(tickers):
                 logger.error("Не удалось инициализировать HTTP-клиент после 5 попыток. Прекращаем сбор данных.")
                 break
             await asyncio.sleep(5)
-        finally:
-            logger.info("Сбор данных завершён")
+    finally:
+        logger.info("Сбор данных завершён")
 
 # Основная функция для запуска приложения
 async def main():
     logger.info("Инициализация Telegram-бота...")
     global bot
-    bot = Bot(token=TELEGRAM_TOKEN)
+    bot = Bot(token=BOT_TOKEN)  # Изменили TELEGRAM_TOKEN на BOT_TOKEN
     logger.info("Telegram-бот успешно инициализирован.")
 
     # Инициализация базы данных
