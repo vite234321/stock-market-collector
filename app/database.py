@@ -1,11 +1,14 @@
 # app/database.py
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, declarative_base
 import os
 import logging
 
 # Настройка логирования
 logger = logging.getLogger(__name__)
+
+# Определяем Base для ORM
+Base = declarative_base()
 
 # Получаем строку подключения из переменной окружения
 DATABASE_URL = os.getenv("DATABASE_URL")

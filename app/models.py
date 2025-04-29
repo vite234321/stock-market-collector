@@ -8,7 +8,7 @@ class Stock(Base):
     ticker = Column(String, unique=True, index=True)
     name = Column(String)
     last_price = Column(Float)
-    volume = Column(Float)  # Изменяем с Integer на Float
+    volume = Column(Float)
     updated_at = Column(DateTime)
 
 class Signal(Base):
