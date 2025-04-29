@@ -5,8 +5,11 @@ import logging
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%levelname)s] %(name)s: %(message)s")
+# Настройка логирования (исправляем формат)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 # Получение строки подключения из переменной окружения
@@ -20,7 +23,7 @@ if DATABASE_URL.startswith("postgres://"):
 elif DATABASE_URL.startswith("postgresql+asyncpg://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
 
-logger.info(f"Строка подключения к базе данных: {DATABASE_URL}")
+logger.info("Строка подключения к базе данных: %s", DATABASE_URL)
 
 # Создание асинхронного движка
 try:
@@ -32,7 +35,7 @@ try:
     )
     logger.info("Движок SQLAlchemy для коннектора создан успешно")
 except Exception as e:
-    logger.error(f"Ошибка создания движка SQLAlchemy: {e}")
+    logger.error("Ошибка создания движка SQLAlchemy: %s", str(e))
     raise
 
 # Создание фабрики сессий
@@ -50,14 +53,14 @@ Base = declarative_base()
 async def init_db():
     for attempt in range(1, 10):  # 10 попыток
         try:
-            logger.info(f"Попытка {attempt}: подключение к базе данных...")
+            logger.info("Попытка %d: подключение к базе данных...", attempt)
             async with engine.begin() as conn:
                 logger.info("Соединение с базой данных успешно установлено.")
                 await conn.run_sync(Base.metadata.create_all)
                 logger.info("Таблицы успешно созданы или уже существуют.")
                 return
         except Exception as e:
-            logger.error(f"Ошибка подключения к базе данных на попытке {attempt}: {e}")
+            logger.error("Ошибка подключения к базе данных на попытке %d: %s", attempt, str(e))
             if attempt == 9:
                 logger.error("Не удалось подключиться к базе данных после 10 попыток. Завершаем работу.")
                 raise
