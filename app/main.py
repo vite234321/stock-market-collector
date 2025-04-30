@@ -9,7 +9,7 @@ from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select, update
 from sqlalchemy.sql import text
-from tinkoff_investments import AsyncClient  # Импортируем из tinkoff-investments
+from tinkoff_investments.client import AsyncClient  # Исправляем импорт
 
 from .database import async_session, init_db
 from .models import Stock, Signal, Subscription
