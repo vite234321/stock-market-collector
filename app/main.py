@@ -8,8 +8,8 @@ import httpx
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select, update
-from tinkoff.invest import AsyncClient, InstrumentIdType  # Добавляем для работы с Tinkoff API
-from tinkoff.invest.exceptions import InvestError
+from sqlalchemy.sql import text
+from tinkoff_investments import AsyncClient  # Импортируем из tinkoff-investments
 
 from .database import async_session, init_db
 from .models import Stock, Signal, Subscription
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # Инициализация Telegram-бота
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-TINKOFF_TOKEN = os.getenv("TINKOFF_TOKEN")  # Добавляем токен Tinkoff
+TINKOFF_TOKEN = os.getenv("TINKOFF_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не установлен в переменных окружения")
 if not TINKOFF_TOKEN:
@@ -41,7 +41,6 @@ async def fetch_tickers():
             if secid_col not in columns:
                 raise KeyError("Колонка SECID/secid отсутствует в данных MOEX")
             secid_index = columns.index(secid_col)
-            # Убираем .ME из тикеров
             tickers = [row[secid_index] for row in data["securities"]["data"] if row[secid_index]]
             logger.info(f"Получено {len(tickers)} тикеров: {tickers[:5]}...")
             return tickers
@@ -71,33 +70,19 @@ async def fetch_stock_data_moex(ticker, client):
 # Функция для обновления FIGI
 async def update_figi(ticker, tinkoff_client):
     try:
-        response = await tinkoff_client.instruments.share_by(
-            id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_TICKER,
-            class_code="TQBR",
-            id=ticker
-        )
-        figi = response.instrument.figi
-        logger.info(f"FIGI для {ticker} обновлён: {figi}")
-        return figi
-    except InvestError as e:
-        if "NOT_FOUND" in str(e):
+        # Ищем инструмент по тикеру
+        instruments = await tinkoff_client.find_instrument(query=ticker, instrument_type='share')
+        if not instruments:
             logger.error(f"Инструмент {ticker} не найден в Tinkoff API")
             return None
-        elif "RESOURCE_EXHAUSTED" in str(e):
-            reset_time = int(e.metadata.ratelimit_reset) if e.metadata.ratelimit_reset else 60
-            logger.warning(f"Достигнут лимит запросов Tinkoff API, ожидание {reset_time} секунд...")
-            await asyncio.sleep(reset_time)
-            response = await tinkoff_client.instruments.share_by(
-                id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_TICKER,
-                class_code="TQBR",
-                id=ticker
-            )
-            figi = response.instrument.figi
-            logger.info(f"FIGI для {ticker} обновлён после ожидания: {figi}")
-            return figi
-        else:
-            logger.error(f"Не удалось обновить FIGI для {ticker}: {e}")
-            return None
+        # Фильтруем по class_code TQBR (Московская биржа, основные акции)
+        for instrument in instruments:
+            if hasattr(instrument, 'class_code') and instrument.class_code == 'TQBR':
+                figi = instrument.figi
+                logger.info(f"FIGI для {ticker} обновлён: {figi}")
+                return figi
+        logger.error(f"Инструмент {ticker} с class_code TQBR не найден в Tinkoff API")
+        return None
     except Exception as e:
         logger.error(f"Не удалось обновить FIGI для {ticker}: {e}")
         return None
@@ -139,7 +124,7 @@ async def collect_stock_data(tickers):
                     # Если есть TINKOFF_TOKEN, инициализируем клиента Tinkoff API
                     tinkoff_client = None
                     if TINKOFF_TOKEN:
-                        tinkoff_client = AsyncClient(TINKOFF_TOKEN)
+                        tinkoff_client = AsyncClient(token=TINKOFF_TOKEN)
 
                     for ticker in tickers:
                         logger.info(f"Обработка тикера: {ticker}")
