@@ -5,11 +5,12 @@ import os
 from datetime import datetime
 
 import httpx
+import pkg_resources  # Для проверки установленных пакетов
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select, update
 from sqlalchemy.sql import text
-from tinkoff_investments.client import AsyncClient  # Исправляем импорт
+from tinkoff_investments.client import AsyncClient
 
 from .database import async_session, init_db
 from .models import Stock, Signal, Subscription
@@ -17,6 +18,12 @@ from .models import Stock, Signal, Subscription
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
+
+# Временная отладка: выведем список установленных пакетов
+installed_packages = pkg_resources.working_set
+logger.info("Установленные пакеты:")
+for package in installed_packages:
+    logger.info(f"{package.key}=={package.version}")
 
 # Инициализация Telegram-бота
 BOT_TOKEN = os.getenv("BOT_TOKEN")
