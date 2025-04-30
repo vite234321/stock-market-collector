@@ -8,6 +8,8 @@ import httpx
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select, update
+from tinkoff.invest import AsyncClient, InstrumentIdType  # Добавляем для работы с Tinkoff API
+from tinkoff.invest.exceptions import InvestError
 
 from .database import async_session, init_db
 from .models import Stock, Signal, Subscription
@@ -18,8 +20,11 @@ logger = logging.getLogger(__name__)
 
 # Инициализация Telegram-бота
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+TINKOFF_TOKEN = os.getenv("TINKOFF_TOKEN")  # Добавляем токен Tinkoff
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не установлен в переменных окружения")
+if not TINKOFF_TOKEN:
+    logger.warning("TINKOFF_TOKEN не установлен. Обновление FIGI не будет выполнено.")
 bot = Bot(token=BOT_TOKEN)
 
 # Функция для получения тикеров с MOEX
@@ -36,36 +41,85 @@ async def fetch_tickers():
             if secid_col not in columns:
                 raise KeyError("Колонка SECID/secid отсутствует в данных MOEX")
             secid_index = columns.index(secid_col)
-            tickers = [f"{row[secid_index]}.ME" for row in data["securities"]["data"] if row[secid_index]]
+            # Убираем .ME из тикеров
+            tickers = [row[secid_index] for row in data["securities"]["data"] if row[secid_index]]
             logger.info(f"Получено {len(tickers)} тикеров: {tickers[:5]}...")
             return tickers
     except Exception as e:
         logger.error(f"Ошибка получения списка тикеров с MOEX: {e}")
         logger.info("Используем резервный список тикеров.")
-        return ["SBER.ME", "GAZP.ME", "LKOH.ME", "YNDX.ME", "ROSN.ME"]
+        return ["SBER", "GAZP", "LKOH", "YNDX", "ROSN"]
 
 # Функция для получения данных о тикере с MOEX
 async def fetch_stock_data_moex(ticker, client):
-    ticker_moex = ticker.replace(".ME", "")
-    url = f"https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/securities/{ticker_moex}.json"
+    url = f"https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/securities/{ticker}.json"
     try:
         response = await client.get(url)
         response.raise_for_status()
         data = response.json()
         if "marketdata" not in data or not data["marketdata"]["data"]:
-            return ticker_moex, None, None
+            return ticker, None, None
         market_data = data["marketdata"]["data"][0]
         columns = data["marketdata"]["columns"]
         last_price = market_data[columns.index("LAST")] if "LAST" in columns else None
         volume = market_data[columns.index("VOLUME")] if "VOLUME" in columns else None
-        return ticker_moex, last_price, volume
+        return ticker, last_price, volume
     except Exception as e:
         logger.error(f"Ошибка MOEX для {ticker}: {e}")
-        return ticker_moex, None, None
+        return ticker, None, None
 
-# Функция для анализа аномалий (заглушка, можно реализовать позже)
-async def detect_anomalies_for_ticker(ticker, last_price, volume, db):
-    return None  # Реализуйте логику анализа аномалий, если нужно
+# Функция для обновления FIGI
+async def update_figi(ticker, tinkoff_client):
+    try:
+        response = await tinkoff_client.instruments.share_by(
+            id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_TICKER,
+            class_code="TQBR",
+            id=ticker
+        )
+        figi = response.instrument.figi
+        logger.info(f"FIGI для {ticker} обновлён: {figi}")
+        return figi
+    except InvestError as e:
+        if "NOT_FOUND" in str(e):
+            logger.error(f"Инструмент {ticker} не найден в Tinkoff API")
+            return None
+        elif "RESOURCE_EXHAUSTED" in str(e):
+            reset_time = int(e.metadata.ratelimit_reset) if e.metadata.ratelimit_reset else 60
+            logger.warning(f"Достигнут лимит запросов Tinkoff API, ожидание {reset_time} секунд...")
+            await asyncio.sleep(reset_time)
+            response = await tinkoff_client.instruments.share_by(
+                id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_TICKER,
+                class_code="TQBR",
+                id=ticker
+            )
+            figi = response.instrument.figi
+            logger.info(f"FIGI для {ticker} обновлён после ожидания: {figi}")
+            return figi
+        else:
+            logger.error(f"Не удалось обновить FIGI для {ticker}: {e}")
+            return None
+    except Exception as e:
+        logger.error(f"Не удалось обновить FIGI для {ticker}: {e}")
+        return None
+
+# Функция для анализа аномалий
+async def detect_anomalies_for_ticker(ticker: str, last_price: float, volume: float, db: AsyncSession):
+    try:
+        query = """
+        SELECT last_price
+        FROM stocks
+        WHERE ticker = :ticker AND updated_at >= NOW() - INTERVAL '10 minutes'
+        ORDER BY updated_at DESC
+        LIMIT 1 OFFSET 1
+        """
+        result = await db.execute(text(query).bindparams(ticker=ticker))
+        prev_price = result.scalar()
+        if prev_price and abs(last_price - prev_price) / prev_price > 0.05:
+            return {"type": "price_spike", "value": last_price}
+        return None
+    except Exception as e:
+        logger.error(f"Ошибка анализа аномалий для {ticker}: {e}")
+        return None
 
 # Функция для сбора данных
 async def collect_stock_data(tickers):
@@ -81,7 +135,12 @@ async def collect_stock_data(tickers):
                     test_query = await db.execute(select(Stock))
                     test_result = test_query.scalars().all()
                     logger.info(f"Тестовый запрос выполнен. Найдено записей в таблице stocks: {len(test_result)}")
-                    
+
+                    # Если есть TINKOFF_TOKEN, инициализируем клиента Tinkoff API
+                    tinkoff_client = None
+                    if TINKOFF_TOKEN:
+                        tinkoff_client = AsyncClient(TINKOFF_TOKEN)
+
                     for ticker in tickers:
                         logger.info(f"Обработка тикера: {ticker}")
                         for attempt in range(1, 4):
@@ -97,6 +156,11 @@ async def collect_stock_data(tickers):
 
                                 logger.info(f"Получены данные для {ticker}: цена={last_price}, объём={volume}")
 
+                                # Обновляем FIGI, если есть клиент Tinkoff API
+                                figi = None
+                                if tinkoff_client:
+                                    figi = await update_figi(ticker, tinkoff_client)
+
                                 # Работа с базой данных
                                 logger.info(f"Поиск записи для {ticker} в базе данных...")
                                 result = await db.execute(select(Stock).where(Stock.ticker == ticker))
@@ -104,14 +168,17 @@ async def collect_stock_data(tickers):
                                 logger.info(f"Результат поиска: {stock_entry}")
                                 if stock_entry:
                                     logger.info(f"Запись для {ticker} найдена, обновляем...")
+                                    update_values = {
+                                        "last_price": last_price,
+                                        "volume": volume,
+                                        "updated_at": datetime.utcnow()
+                                    }
+                                    if figi:
+                                        update_values["figi"] = figi
                                     await db.execute(
-                                        update(Stock).where(Stock.ticker == ticker).values(
-                                            last_price=last_price,
-                                            volume=volume,
-                                            updated_at=datetime.utcnow()
-                                        )
+                                        update(Stock).where(Stock.ticker == ticker).values(**update_values)
                                     )
-                                    logger.info(f"Запись для {ticker} обновлена: цена={last_price}, объём={volume}")
+                                    logger.info(f"Запись для {ticker} обновлена: цена={last_price}, объём={volume}, FIGI={figi}")
                                 else:
                                     logger.info(f"Запись для {ticker} не найдена, создаём новую...")
                                     new_stock = Stock(
@@ -119,11 +186,12 @@ async def collect_stock_data(tickers):
                                         name=stock_name,
                                         last_price=last_price,
                                         volume=volume,
+                                        figi=figi,
                                         updated_at=datetime.utcnow()
                                     )
                                     logger.info(f"Добавление новой записи: {new_stock.__dict__}")
                                     db.add(new_stock)
-                                    logger.info(f"Новая запись для {ticker} создана: цена={last_price}, объём={volume}")
+                                    logger.info(f"Новая запись для {ticker} создана: цена={last_price}, объём={volume}, FIGI={figi}")
                                 await db.commit()
                                 logger.info(f"Коммит изменений для {ticker} выполнен.")
 
@@ -178,6 +246,9 @@ async def collect_stock_data(tickers):
                                     break
                                 await asyncio.sleep(2)
                                 await db.rollback()
+                    # Закрываем Tinkoff клиент, если он был создан
+                    if tinkoff_client:
+                        await tinkoff_client.close()
                     break
                 finally:
                     await db.close()
@@ -223,7 +294,7 @@ async def main():
     # Бесконечный цикл, чтобы процесс не завершался
     try:
         while True:
-            await asyncio.sleep(3600)  # Спим 1 час, чтобы процесс не завершался
+            await asyncio.sleep(3600)
     except (KeyboardInterrupt, SystemExit):
         logger.info("Завершение работы коллектора...")
         scheduler.shutdown()

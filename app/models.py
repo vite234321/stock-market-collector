@@ -13,6 +13,7 @@ class Stock(Base):
     name = Column(String, nullable=False)
     last_price = Column(Float, nullable=True)
     volume = Column(Float, nullable=True)
+    figi = Column(String, nullable=True)  # Добавляем поле figi
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 # Модель для таблицы signals
