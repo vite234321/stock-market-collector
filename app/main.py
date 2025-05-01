@@ -9,7 +9,7 @@ from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select, update
 from sqlalchemy.sql import text
-from tinkoff_invest import AsyncClient, InstrumentIdType  # Используем tinkoff-invest
+from tinkoff_investments import AsyncClient  # Используем tinkoff-investments
 
 from .database import async_session, init_db
 from .models import Stock, Signal, Subscription
@@ -67,22 +67,20 @@ async def fetch_stock_data_moex(ticker, client):
         logger.error(f"Ошибка MOEX для {ticker}: {e}")
         return ticker, None, None
 
-# Функция для обновления FIGI
+# Функция для обновления FIGI с использованием tinkoff-investments
 async def update_figi(ticker, tinkoff_client):
     try:
-        # Ищем инструмент по тикеру
-        response = await tinkoff_client.instruments.share_by(
-            id_type=InstrumentIdType.TICKER,
-            id=ticker,
-            class_code="TQBR"
-        )
-        instrument = response.instrument
-        if not instrument:
+        instruments = await tinkoff_client.find_instrument(query=ticker, instrument_type='share')
+        if not instruments:
             logger.error(f"Инструмент {ticker} не найден в Tinkoff API")
             return None
-        figi = instrument.figi
-        logger.info(f"FIGI для {ticker} обновлён: {figi}")
-        return figi
+        for instrument in instruments:
+            if hasattr(instrument, 'class_code') and instrument.class_code == 'TQBR':
+                figi = instrument.figi
+                logger.info(f"FIGI для {ticker} обновлён: {figi}")
+                return figi
+        logger.error(f"Инструмент {ticker} с class_code TQBR не найден в Tinkoff API")
+        return None
     except Exception as e:
         logger.error(f"Не удалось обновить FIGI для {ticker}: {e}")
         return None

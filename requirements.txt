@@ -4,4 +4,5 @@ httpx==0.27.0
 pydantic==2.7.4
 SQLAlchemy[asyncio]==2.0.31
 asyncpg==0.29.0
-tinkoff-investments==0.2.0b111
+tinkoff-invest==1.0.5
+psycopg==3.2.1
