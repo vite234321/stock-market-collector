@@ -113,7 +113,7 @@ async def update_figi(ticker: str, tinkoff_token: str, client: httpx.AsyncClient
         return None
 
 # Функция для анализа аномалий
-async def detect_anomalies_for 옍icker(ticker: str, last_price: float, volume: float, db: AsyncSession):
+async def detect_anomalies_for(ticker: str, last_price: float, volume: float, db: AsyncSession):
     try:
         query = """
         SELECT last_price
