@@ -24,6 +24,18 @@ if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не установлен в переменных окружения")
 bot = Bot(token=BOT_TOKEN)
 
+# Функция для получения всех tinkoff_token из таблицы users
+async def get_all_tinkoff_tokens(db: AsyncSession) -> list[str]:
+    try:
+        query = text("SELECT tinkoff_token FROM users WHERE tinkoff_token IS NOT NULL")
+        result = await db.execute(query)
+        tokens = result.scalars().all()
+        logger.info(f"Найдено {len(tokens)} пользователей с tinkoff_token: {tokens}")
+        return tokens
+    except Exception as e:
+        logger.error(f"Ошибка при получении tinkoff_token из базы данных: {e}")
+        return []
+
 # Функция для получения тикеров с MOEX
 async def fetch_tickers():
     try:
@@ -64,19 +76,6 @@ async def fetch_stock_data_moex(ticker, client):
         logger.error(f"Ошибка MOEX для {ticker}: {e}")
         return ticker, None, None
 
-# Функция для получения tinkoff_token из таблицы users
-async def get_tinkoff_token(user_id: int, db: AsyncSession) -> str | None:
-    try:
-        query = text("SELECT tinkoff_token FROM users WHERE user_id = :user_id")
-        result = await db.execute(query.bindparams(user_id=user_id))
-        token = result.scalar()
-        if not token:
-            logger.warning(f"TINKOFF_TOKEN для user_id {user_id} не найден в базе данных.")
-        return token
-    except Exception as e:
-        logger.error(f"Ошибка при получении TINKOFF_TOKEN для user_id {user_id}: {e}")
-        return None
-
 # Функция для обновления FIGI с использованием прямых HTTP-запросов к Tinkoff API
 async def update_figi(ticker: str, tinkoff_token: str, client: httpx.AsyncClient) -> str | None:
     if not tinkoff_token:
@@ -114,6 +113,9 @@ async def update_figi(ticker: str, tinkoff_token: str, client: httpx.AsyncClient
                 logger.info(f"FIGI для {cleaned_ticker} обновлён: {figi}")
                 return figi
         logger.error(f"Инструмент {cleaned_ticker} с class_code TQBR не найден в Tinkoff API")
+        return None
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP ошибка при запросе FIGI для {cleaned_ticker}: {e.response.status_code} - {e.response.text}")
         return None
     except Exception as e:
         logger.error(f"Не удалось обновить FIGI для {cleaned_ticker}: {e}")
@@ -153,6 +155,11 @@ async def collect_stock_data(tickers):
                     test_result = test_query.scalars().all()
                     logger.info(f"Тестовый запрос выполнен. Найдено записей в таблице stocks: {len(test_result)}")
 
+                    # Получаем все доступные tinkoff_token
+                    tinkoff_tokens = await get_all_tinkoff_tokens(db)
+                    if not tinkoff_tokens:
+                        logger.warning("Не найдено ни одного tinkoff_token в базе данных. FIGI не будет обновляться.")
+
                     for ticker in tickers:
                         logger.info(f"Обработка тикера: {ticker}")
                         for attempt in range(1, 4):
@@ -168,19 +175,13 @@ async def collect_stock_data(tickers):
 
                                 logger.info(f"Получены данные для {ticker}: цена={last_price}, объём={volume}")
 
-                                # Получаем FIGI от всех подписчиков
+                                # Обновляем FIGI для всех тикеров, пробуя все доступные токены
                                 figi = None
-                                subscriptions = await db.execute(
-                                    select(Subscription).where(Subscription.ticker == ticker)
-                                )
-                                subscriptions = subscriptions.scalars().all()
-                                logger.info(f"Найдено {len(subscriptions)} подписчиков для {ticker}")
-                                for sub in subscriptions:
-                                    tinkoff_token = await get_tinkoff_token(sub.user_id, db)
-                                    if tinkoff_token:
-                                        figi = await update_figi(ticker, tinkoff_token, client)
-                                        if figi:
-                                            break  # Используем первый успешный FIGI
+                                for token in tinkoff_tokens:
+                                    figi = await update_figi(ticker, token, client)
+                                    if figi:
+                                        break  # Используем первый успешный FIGI
+                                    await asyncio.sleep(1)  # Задержка между запросами
 
                                 # Работа с базой данных: обновление или создание записи о тикере
                                 logger.info(f"Поиск записи для {ticker} в базе данных...")
@@ -241,7 +242,12 @@ async def collect_stock_data(tickers):
                                         response.raise_for_status()
 
                                         logger.info(f"Поиск подписчиков для {ticker}...")
-                                        for sub in subscriptions:  # Уже получили подписчиков выше
+                                        subscriptions = await db.execute(
+                                            select(Subscription).where(Subscription.ticker == ticker)
+                                        )
+                                        subscriptions = subscriptions.scalars().all()
+                                        logger.info(f"Найдено {len(subscriptions)} подписчиков для {ticker}")
+                                        for sub in subscriptions:
                                             try:
                                                 await bot.send_message(
                                                     chat_id=sub.user_id,
