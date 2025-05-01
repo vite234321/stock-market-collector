@@ -9,7 +9,7 @@ from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select, update
 from sqlalchemy.sql import text
-from sqlalchemy.ext.asyncio import AsyncSession  # Импортируем AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .database import async_session, init_db
 from .models import Stock, Signal, Subscription
@@ -82,13 +82,18 @@ async def update_figi(ticker: str, tinkoff_token: str, client: httpx.AsyncClient
     if not tinkoff_token:
         logger.warning("TINKOFF_TOKEN не предоставлен, пропускаем обновление FIGI")
         return None
+    
+    # Убираем суффикс .ME из тикера
+    cleaned_ticker = ticker.replace(".ME", "")
+    logger.info(f"Запрос FIGI для тикера: {cleaned_ticker}")
+    
     try:
         headers = {
             "Authorization": f"Bearer {tinkoff_token}",
             "Content-Type": "application/json"
         }
         params = {
-            "ticker": ticker,
+            "ticker": cleaned_ticker,
             "classCode": "TQBR"
         }
         response = await client.get(
@@ -98,22 +103,24 @@ async def update_figi(ticker: str, tinkoff_token: str, client: httpx.AsyncClient
         )
         response.raise_for_status()
         data = response.json()
+        logger.info(f"Ответ от Tinkoff API для {cleaned_ticker}: {data}")
+        
         if "payload" not in data or not data["payload"]["instruments"]:
-            logger.error(f"Инструмент {ticker} не найден в Tinkoff API")
+            logger.error(f"Инструмент {cleaned_ticker} не найден в Tinkoff API")
             return None
         for instrument in data["payload"]["instruments"]:
             if instrument["classCode"] == "TQBR":
                 figi = instrument["figi"]
-                logger.info(f"FIGI для {ticker} обновлён: {figi}")
+                logger.info(f"FIGI для {cleaned_ticker} обновлён: {figi}")
                 return figi
-        logger.error(f"Инструмент {ticker} с class_code TQBR не найден в Tinkoff API")
+        logger.error(f"Инструмент {cleaned_ticker} с class_code TQBR не найден в Tinkoff API")
         return None
     except Exception as e:
-        logger.error(f"Не удалось обновить FIGI для {ticker}: {e}")
+        logger.error(f"Не удалось обновить FIGI для {cleaned_ticker}: {e}")
         return None
 
 # Функция для анализа аномалий
-async def detect_anomalies_for(ticker: str, last_price: float, volume: float, db: AsyncSession):
+async def detect_anomalies_for_ticker(ticker: str, last_price: float, volume: float, db: AsyncSession):
     try:
         query = """
         SELECT last_price
@@ -161,12 +168,6 @@ async def collect_stock_data(tickers):
 
                                 logger.info(f"Получены данные для {ticker}: цена={last_price}, объём={volume}")
 
-                                # Работа с базой данных: обновление или создание записи о тикере
-                                logger.info(f"Поиск записи для {ticker} в базе данных...")
-                                result = await db.execute(select(Stock).where(Stock.ticker == ticker))
-                                stock_entry = result.scalars().first()
-                                logger.info(f"Результат поиска: {stock_entry}")
-
                                 # Получаем FIGI от всех подписчиков
                                 figi = None
                                 subscriptions = await db.execute(
@@ -181,6 +182,11 @@ async def collect_stock_data(tickers):
                                         if figi:
                                             break  # Используем первый успешный FIGI
 
+                                # Работа с базой данных: обновление или создание записи о тикере
+                                logger.info(f"Поиск записи для {ticker} в базе данных...")
+                                result = await db.execute(select(Stock).where(Stock.ticker == ticker))
+                                stock_entry = result.scalars().first()
+                                logger.info(f"Результат поиска: {stock_entry}")
                                 if stock_entry:
                                     logger.info(f"Запись для {ticker} найдена, обновляем...")
                                     update_values = {
