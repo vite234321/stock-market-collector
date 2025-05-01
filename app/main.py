@@ -5,13 +5,10 @@ import os
 from datetime import datetime
 
 import httpx
-import pkg_resources  # Для проверки установленных пакетов
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select, update
 from sqlalchemy.sql import text
-# Закомментируем импорт tinkoff_investments, чтобы избежать ошибки
-# from tinkoff_investments import AsyncClient  # Используем tinkoff-investments
 
 from .database import async_session, init_db
 from .models import Stock, Signal, Subscription
@@ -19,12 +16,6 @@ from .models import Stock, Signal, Subscription
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
-
-# Временная отладка: выведем список установленных пакетов
-installed_packages = pkg_resources.working_set
-logger.info("Установленные пакеты:")
-for package in installed_packages:
-    logger.info(f"{package.key}=={package.version}")
 
 # Инициализация Telegram-бота
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -75,23 +66,40 @@ async def fetch_stock_data_moex(ticker, client):
         logger.error(f"Ошибка MOEX для {ticker}: {e}")
         return ticker, None, None
 
-# Функция для обновления FIGI (закомментируем, так как использует tinkoff_investments)
-# async def update_figi(ticker, tinkoff_client):
-#     try:
-#         instruments = await tinkoff_client.find_instrument(query=ticker, instrument_type='share')
-#         if not instruments:
-#             logger.error(f"Инструмент {ticker} не найден в Tinkoff API")
-#             return None
-#         for instrument in instruments:
-#             if hasattr(instrument, 'class_code') and instrument.class_code == 'TQBR':
-#                 figi = instrument.figi
-#                 logger.info(f"FIGI для {ticker} обновлён: {figi}")
-#                 return figi
-#         logger.error(f"Инструмент {ticker} с class_code TQBR не найден в Tinkoff API")
-#         return None
-#     except Exception as e:
-#         logger.error(f"Не удалось обновить FIGI для {ticker}: {e}")
-#         return None
+# Функция для обновления FIGI с использованием прямых HTTP-запросов к Tinkoff API
+async def update_figi(ticker, client):
+    if not TINKOFF_TOKEN:
+        logger.warning("TINKOFF_TOKEN не установлен, пропускаем обновление FIGI")
+        return None
+    try:
+        headers = {
+            "Authorization": f"Bearer {TINKOFF_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        params = {
+            "ticker": ticker,
+            "classCode": "TQBR"
+        }
+        response = await client.get(
+            "https://api-invest.tinkoff.ru/openapi/market/search/by-ticker",
+            headers=headers,
+            params=params
+        )
+        response.raise_for_status()
+        data = response.json()
+        if "payload" not in data or not data["payload"]["instruments"]:
+            logger.error(f"Инструмент {ticker} не найден в Tinkoff API")
+            return None
+        for instrument in data["payload"]["instruments"]:
+            if instrument["classCode"] == "TQBR":
+                figi = instrument["figi"]
+                logger.info(f"FIGI для {ticker} обновлён: {figi}")
+                return figi
+        logger.error(f"Инструмент {ticker} с class_code TQBR не найден в Tinkoff API")
+        return None
+    except Exception as e:
+        logger.error(f"Не удалось обновить FIGI для {ticker}: {e}")
+        return None
 
 # Функция для анализа аномалий
 async def detect_anomalies_for_ticker(ticker: str, last_price: float, volume: float, db: AsyncSession):
@@ -127,11 +135,6 @@ async def collect_stock_data(tickers):
                     test_result = test_query.scalars().all()
                     logger.info(f"Тестовый запрос выполнен. Найдено записей в таблице stocks: {len(test_result)}")
 
-                    # Закомментируем инициализацию Tinkoff клиента
-                    # tinkoff_client = None
-                    # if TINKOFF_TOKEN:
-                    #     tinkoff_client = AsyncClient(TINKOFF_TOKEN)
-
                     for ticker in tickers:
                         logger.info(f"Обработка тикера: {ticker}")
                         for attempt in range(1, 4):
@@ -147,11 +150,8 @@ async def collect_stock_data(tickers):
 
                                 logger.info(f"Получены данные для {ticker}: цена={last_price}, объём={volume}")
 
-                                # Закомментируем обновление FIGI
-                                # figi = None
-                                # if tinkoff_client:
-                                #     figi = await update_figi(ticker, tinkoff_client)
-                                figi = None  # Временно установим figi в None
+                                # Обновляем FIGI через прямой запрос
+                                figi = await update_figi(ticker, client)
 
                                 # Работа с базой данных
                                 logger.info(f"Поиск записи для {ticker} в базе данных...")
@@ -238,9 +238,6 @@ async def collect_stock_data(tickers):
                                     break
                                 await asyncio.sleep(2)
                                 await db.rollback()
-                    # Закрываем Tinkoff клиент, если он был создан
-                    # if tinkoff_client:
-                    #     await tinkoff_client.close()
                     break
                 finally:
                     await db.close()
